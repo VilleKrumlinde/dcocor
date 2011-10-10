@@ -1,0 +1,297 @@
+COMPILER DelphiCond
+
+FRAME "delphi.frm"
+ header = (.
+{ Copyright (C) 2009, Serge Voloshenyuk
+  
+  This file is Free Software and part of DCocoR
+  
+  It is licensed under the following three licenses as alternatives:
+    1. GNU Lesser General Public License (LGPL) V2.1 or any newer version
+    2. GNU General Public License (GPL) V2 or any newer version
+    3. Apache License, V2.0 or any newer version
+  
+  You may not use this file except in compliance with at least one of
+  the above three licenses.
+  
+  See LICENSE.txt at the top of this package for the
+  complete terms and further detail along with the license texts for
+  the licenses in COPYING-LIB.txt, COPYING.txt and LICENSE-2.0.txt respectively.
+} 
+.)
+uses = (.SysUtils,Variants,StrUtils.)
+private = (.
+    fVersion: Integer;
+    fDefinesStr: String;
+    procedure setVersion(const Value: Integer);
+    procedure setDefinesStr(const Value: String);
+.)
+protected = (.
+  fDefines: TStringList;
+  function IsDefined(const id: String): Boolean;
+  procedure setDefined(const id: String; val: Boolean);
+  function IsDeclared(const str: String): Boolean;
+  function getValueFor(const str: String): Variant;
+  function Functor(FuncOp: Integer; Value: Variant): Variant;
+.)
+public = (.
+  destructor Destroy; override;
+
+  function Evaluate(const str: String): Boolean;
+.)
+
+ publicProps = (.
+ property Defined[const name: String]: Boolean read IsDefined write setDefined;
+ property Version: Integer read fVersion write setVersion;
+ property Defines: String read fDefinesStr write setDefinesStr;
+.) 
+
+
+precreate = (.
+  fDefines := TStringList.Create;
+  with fDefines do
+  begin
+    Sorted := True;
+    CaseSensitive := False;
+    Duplicates := dupIgnore;
+  end;  
+  fVersion := 185;
+  Defines := 'MSWINDOWS,WIN32,CPU386';
+.)
+
+implementation = 
+(.
+destructor TDelphiCond.Destroy; 
+begin
+  fDefines.Free;
+  inherited;
+end;
+
+function TDelphiCond.Evaluate(const str: String): Boolean;
+var rez: Variant; 
+begin
+  SetSource(str);
+  _Expression(rez);
+  Result := Successful and rez;
+end;
+
+function TDelphiCond.IsDefined(const id: String): Boolean;
+var I: Integer;
+begin
+  Result := fDefines.Find(id,I);
+end;
+
+procedure TDelphiCond.setDefined(const id: String; val: Boolean);
+var I: Integer;
+begin
+  with fDefines do 
+  if Find(id,I) then
+  begin
+    if not val then Delete(I);
+  end else if val then fDefines.Add(id);
+end;
+
+function TDelphiCond.IsDeclared(const str: String): Boolean;
+begin
+  raise Exception.Create('Predicate "Declared" is not implemented');
+end;
+
+function TDelphiCond.getValueFor(const str: String): Variant;
+begin
+  Result := str;
+//  raise Exception.Create('Feature is not implemented: '+Scanner.Source);
+end;
+
+function TDelphiCond.Functor(FuncOp: Integer; Value: Variant): Variant;
+begin
+  case FuncOp of
+  SIZEOFSym:
+     case IndexText(VarToStr(Value),['CHAR','INTEGER','POINTER']) of
+       0: Result := 1;
+       1,2: Result := 4;
+       else raise Exception.CreateFmt('Sizeof(%s) id not implemented',[VarToStr(Value)]);
+     end;
+  else raise Exception.CreateFmt('Functions are not implemented: %s',[Scanner.Source]);
+  end;
+end;
+
+procedure TDelphiCond.setDefinesStr(const Value: String);
+begin
+  fDefinesStr := Value;
+  fDefines.CommaText := Format('%s,VER%d',[Value,fVersion]);
+end;
+
+procedure TDelphiCond.setVersion(const Value: Integer);
+begin
+  fVersion := Value;
+  fDefines.CommaText := Format('%s,VER%d',[fDefinesStr,fVersion]);
+end;
+
+.)
+END
+
+
+IGNORECASE
+
+CHARACTERS
+letter="ABCDEFGHIJKLMNOPQRSTUVWXYZ_".
+digit="0123456789".
+hexdigit = digit + "ABCDEF".
+special = "+-*/=<>[].,():;^@{}$#".
+ctrl=CHR(1)..CHR(31).
+tab=CHR(9).
+eol=CHR(13).
+lf=CHR(10).
+noquote=ANY-"'" -ctrl.
+
+TOKENS
+ident = letter{letter|digit}.
+number = digit{digit} | digit { digit } CONTEXT ( ".." ).
+string = ("'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit}))
+         {"'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit})}.
+float = digit{digit}
+        (  "." {digit}
+           [ "E"
+            ["+" |"-"]
+            digit{digit}
+           ]
+          |"E"["+"|"-"]digit{digit}
+        ).
+hexnumber = "$" hexdigit {hexdigit}.
+eq    = '='.
+gr    = '>'. 
+les   = '<'. 
+lesEq = '<='.
+grEq  = '>='.
+noeq  = '<>'.
+
+add = "+".  
+sub = "-".  
+or  = "OR". 
+xor = "XOR".
+
+mult = "*"  .
+divd = "/"  .
+div  = "DIV".
+mod  = "MOD".
+and  = "AND".
+shl  = "SHL".
+shr  = "SHR".
+
+
+
+
+IGNORE tab+lf+eol
+
+PRODUCTIONS
+
+DelphiCond 
+(. var rez: Variant; .)=
+ Expression<rez>
+.
+
+
+Expression<var Value: Variant>
+(. var v2: Variant; RelOp: Integer; .) =
+ SimpleExpression<Value> 
+ { 
+   ( '='| '>' | '<' | '<='| '>=' | '<>'  )
+   (. RelOp := Symbols[0]^.id; .)
+   SimpleExpression<v2>
+   (. case RelOp of
+      eqSym:    Value := Value=v2;
+      grSym:    Value := Value>v2;
+      lesSym:   Value := Value<v2;
+      lesEqSym: Value := Value<=v2;
+      grEqSym:  Value := Value>=v2;
+      noeqSym:  Value := Value<>v2;
+      end;
+   .)
+ }
+.
+
+SimpleExpression<var Value: Variant> 
+(. var v2: Variant; sign: Integer; AddOp: Integer; .) =
+  (.sign := 1;.)
+  ['+' | '-' (.sign := -1;.) ] 
+  Term<Value> (. if sign<0 then value := -value;.)
+  { 
+   ( "+" | "-" | "OR" | "XOR" )
+   (. AddOp := Symbols[0]^.id; .)
+    Term<v2>
+   (. case AddOp of
+      addSym: Value := Value +   v2;
+      subSym: Value := Value -   v2;
+      orSym : Value := Value or  v2;
+      xorSym: Value := Value xor v2;
+      end;
+   .)
+  }
+.
+
+Term<var Value: Variant> 
+(. var v2: Variant; MulOp: Integer; .) =
+ Factor<Value> 
+ { 
+  ("*" | "/" | "DIV" | "MOD" | "AND" | "SHL" | "SHR" )
+  (. MulOp := Symbols[0]^.id; .)
+  Factor<v2>
+   (. case MulOp of
+      multSym: Value := Value *   v2;
+      divdSym: Value := Value /   v2;
+      divSym:  Value := Value div v2;
+      modSym:  Value := Value mod v2;
+      andSym:  Value := Value and v2;
+      shlSym:  Value := Value shl v2;
+      shrSym:  Value := Value shr v2;
+      end;
+   .)
+ }
+.
+
+Factor<var Value: Variant> =
+   "DEFINED" '(' ident   (. Value := IsDefined(LexName);  .)
+   ')'
+ | "DECLARED"'(' ident   (. Value := IsDeclared(LexName); .)
+   ')'
+ | string                   (. Value := LexString; .)
+ | "TRUE"                   (. Value := True; .)
+ | "FALSE"                  (. Value := False; .)
+ | "NOT" Factor<Value>      (. Value := not Value; .)
+ | ident                    (. Value := getValueFor(LexName);.)
+ | Number<Value>
+ | functor<Value>
+ | '(' Expression<Value> ')'
+.
+
+functor<var Value: Variant>
+(. var FuncOp: Integer; .) =
+ (   "ABS"
+   | "CHR"
+   | "HI"      
+   | "HIGH"
+   | "LENGTH"
+   | "LO"    
+   | "LOW"
+   | "ODD"
+   | "ORD"       
+   | "PRED"
+   | "ROUND"
+   | "SIZEOF" 
+   | "SUCC"
+   | "SWAP"
+   | "TRUNC"
+ ) (. FuncOp := Symbols[0]^.id; .)
+  '(' SimpleExpression<Value> ')'
+  (. Value := Functor(FuncOp,Value); .)
+.
+
+
+Number<out Value: Variant> =
+   number     (. Value := StrToInt(LexString); .)
+ | float      (. Value := StrToFloat(LexString); .)
+ | hexnumber  (. Value := StrToInt(LexString); .)
+.
+
+
+END DelphiCond.
