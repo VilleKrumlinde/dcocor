@@ -1,0 +1,447 @@
+COMPILER CocoCompiler
+
+FRAME "delphi.frm"
+ header = (.
+{ Copyright (C) 2009, Serge Voloshenyuk
+  
+  This file is Free Software and part of DCocoR
+  
+  It is licensed under the following three licenses as alternatives:
+    1. GNU Lesser General Public License (LGPL) V2.1 or any newer version
+    2. GNU General Public License (GPL) V2 or any newer version
+    3. Apache License, V2.0 or any newer version
+  
+  You may not use this file except in compliance with at least one of
+  the above three licenses.
+  
+  See LICENSE.txt at the top of this package for the
+  complete terms and further detail along with the license texts for
+  the licenses in COPYING-LIB.txt, COPYING.txt and LICENSE-2.0.txt respectively.
+} 
+.)
+
+ uses = 
+(.SysUtils,Contnrs, Sets, CRTypes, CRT, CRA, Coco, ParserGen.)
+
+ private = (.  
+    fFlagStack: TStack;
+    fFrameName: String;
+    fErrors, fMetaErrors: TObjectList;
+    procedure setFrameName(const Value: String);
+    procedure AddToErrorList(var list: TObjectList; aErrorType,aErrorCode, aLine,aCol: Integer;
+      const aMsg, aData: string);
+ .)
+ protected = (.  
+    procedure ErrorHandler(Sender: TObject; aErrorType,aErrorCode, aLine,aCol: Integer;
+      const aMsg, aData: string);
+    procedure MetaErrorHandler(Sender: TObject; aErrorType,aErrorCode, aLine,aCol: Integer;
+      const aMsg, aData: string);
+    procedure PushFlag;
+    function  PopFlag: Boolean;
+    function  PeakFlag: Boolean;
+    procedure PrintText;
+    procedure PrintVar(const name: String);
+    function getSortedErrors: TList;
+    function Generate: Boolean;
+ .)
+ public = (.  
+    GenFlag: Boolean;
+    Parser: TCoco;
+    Tab: TSymbolTable;
+    DFA: TAutomaton;
+    Generator: TParserGenerator;
+    
+    destructor Destroy; override;
+    function Compile(const ResName: String): Boolean; overload;
+ .)   
+ create = (.
+  Self.OnError := MetaErrorHandler;
+  Parser := TCoco.Create(Self);
+  Parser.OnError := ErrorHandler;
+  Tab := TSymbolTable.Create(Parser);
+  DFA := TAutomaton.Create(Parser,Tab);
+  Parser.tab := Tab;
+  Parser.dfa := DFA;
+ .) 
+ 
+ publicProps = (.
+ property FrameName: String read fFrameName write setFrameName;
+ property Errors: TObjectList read fErrors;
+ property MetaErrors: TObjectList read fMetaErrors;
+.) 
+ implementation = (.
+ 
+destructor T<|!Gramma|>.Destroy;
+begin
+  fFlagStack.Free;
+  fErrors.Free;
+  fMetaErrors.Free;
+  DFA.Free;
+  Tab.Free;
+  inherited;
+end;
+
+function T<|!Gramma|>.Compile(const ResName: String): Boolean;
+begin
+  if fFlagStack<>nil then
+    with fFlagStack do while Count>0 do Pop;
+  FreeAndNil(fErrors);
+  FreeAndNil(fMetaErrors);
+  Parser.ClearOutputs;
+  Tab.Reinit;
+  DFA.Reinit;
+  GenFlag := True;
+  if Generator<>nil then
+    Generator.Clear;
+
+  if ResorceSystem.ResourceExists(ResName) then
+  begin
+    Parser.SetSourceFileName(ResName);
+    Parser.Execute;
+    Result := Generate and Parser.Successful;
+  end else Result := False;
+end;
+
+function T<|!Gramma|>.Generate: Boolean;
+var fn: String;
+begin
+  with DFA do
+    if DirtyDFA then MakeDeterministic;
+  fn := Tab.FrameName;
+  with ResorceSystem do
+  if not ResourceExists(fn) then
+  begin
+    fn := AbsoluteURL(Parser.SrcName,fn);
+    if not ResourceExists(fn) then
+    begin
+      fn := AbsoluteURL(ExePath,Tab.FrameName);
+      if not ResourceExists(fn) then
+      begin
+        Parser.SemErrorInLine(-1,0,Format('Frame file "%s" is not found',[Tab.FrameName]));
+        Result := False;
+        Exit;
+      end;
+    end;
+  end;
+  FrameName := fn;
+  Execute;
+  Result := ErrorCount=0;
+end;
+
+procedure T<|!Gramma|>.setFrameName(const Value: String);
+begin
+  if fFrameName<>Value then
+  begin
+    fFrameName := Value;
+    if ResorceSystem.ResourceExists(Value) then
+      TCocoRScanner(Scanner).SetSource(ResorceSystem.GetResString(Value));
+  end;
+end;
+
+function _LineCompare(Item1, Item2: Pointer): Integer;
+begin
+  Result := Cardinal(TCocoRError(Item1).line)-Cardinal(TCocoRError(Item2).line);
+end;
+
+function T<|!Gramma|>.getSortedErrors: TList;
+begin
+  if (fErrors<>nil)and(fErrors.Count>0) then
+    fErrors.Sort(_LineCompare);
+  Result := fErrors;
+end;
+
+procedure T<|!Gramma|>.AddToErrorList(var list: TObjectList; aErrorType,aErrorCode, aLine,aCol: Integer;
+      const aMsg, aData: string);
+var err: TCocoRError;
+begin
+  err := TCocoRError.Create;
+  with err do
+  begin
+    ErrorType := aErrorType;
+    ErrorCode := aErrorCode;
+    Line := aLine;
+    Col := aCol;
+    Msg := aMsg;
+    Data := aData;
+  end;
+  if list=nil then list := TObjectList.Create;
+  list.Add(err);
+end;      
+
+procedure T<|!Gramma|>.ErrorHandler(Sender: TObject; aErrorType, aErrorCode,
+  aLine, aCol: Integer; const aMsg, aData: string);
+begin
+  AddToErrorList(fErrors,aErrorType,aErrorCode,aLine,aCol,aMsg,aData);
+end;
+
+procedure T<|!Gramma|>.MetaErrorHandler(Sender: TObject; aErrorType,aErrorCode, aLine,aCol: Integer;
+      const aMsg, aData: string);
+begin
+  AddToErrorList(fMetaErrors,aErrorType,aErrorCode,aLine,aCol,aMsg,aData);
+end;
+
+function T<|!Gramma|>.PeakFlag: Boolean;
+begin
+  if (fFlagStack<>nil)and(fFlagStack.Count>0) then
+    Result := Boolean(Integer(fFlagStack.Peek))
+  else Result := True;
+end;
+
+function T<|!Gramma|>.PopFlag: Boolean;
+begin
+  if (fFlagStack<>nil)and(fFlagStack.Count>0) then
+    Result := Boolean(Integer(fFlagStack.Pop))
+  else Result := True;
+end;
+
+procedure T<|!Gramma|>.PushFlag;
+begin
+  if fFlagStack=nil then
+    fFlagStack := TStack.Create;
+  fFlagStack.Push(Pointer(GenFlag));
+end;
+
+procedure T<|!Gramma|>.PrintText;
+var pos: TSymbolRec;
+  ptr,I,endP: PChar;
+  hasNewLine: Boolean;
+begin
+  pos := NextSymbol^;
+  TCocoRScanner(Scanner).SkipTo(MetaKey);
+  if GenFlag then
+  begin
+    Inc(pos.Beg,pos.Len);
+    pos.Len := TCocoRScanner(Scanner).BufferPosition-pos.Beg;
+    if pos.Len<=0 then Exit; 
+    ptr := Scanner.GetSymbolPtr(@pos);
+    if ptr<>nil then
+    begin
+      endP := ptr+pos.Len;
+      I := ptr;
+      hasNewLine := False;
+      while I<>endP do
+      begin
+        if (I^=#13)or(I^=#10)  then
+          hasNewLine := True
+        else if (I^<>' ')and(I^<>#9) then
+          Break;
+        Inc(I);
+      end;
+      if I<>endP then
+        Generator.PrintSemanticCode(ptr,-1,0,pos.Len)
+      else if hasNewLine then
+        Generator.PrintLn;
+    end;
+  end;
+end;
+
+procedure T<|!Gramma|>.PrintVar(const name: String);
+var pos: PSymbol;
+    newPos,oldPos: TSymbolRec;
+    ptr,ptr2: PChar;
+    oldCh: Char;
+    hasMeta: Boolean;
+    BMark, OldSrc: String;
+    WC,EC : Integer;
+begin
+  pos := Tab.TemplateVars[name];
+  if (pos<>nil)and(pos^.Len>0) then
+  begin
+    ptr := Parser.Scanner.GetSymbolPtr(pos);
+    oldCh := (ptr+pos.Len)^;
+    (ptr+pos.Len)^ := #0;
+    ptr2 := StrPos(ptr,PChar(MetaKey));
+    hasMeta := ptr2<>nil;
+    (ptr+pos.Len)^ := oldCh;
+    if hasMeta then
+    begin
+      BMark := Bookmark;
+      OldSrc := Scanner.Source;
+      Scanner.GetSourcePosition(oldPos);
+      WC := WarnCount; EC := ErrorCount;
+      try
+        newPos := pos^;
+        newPos.Len := ptr2-ptr;
+        Generator.PrintFragment(@newPos);
+        newPos := pos^;
+        Inc(newPos.Beg,ptr2-ptr);
+        Dec(newPos.Len,ptr2-ptr);
+        Scanner.SetSource(TCocoRScanner(Parser.Scanner).Source,@newPos);
+        Reinit;
+        _Body;
+      finally
+        Scanner.SetSource(OldSrc,@oldPos);
+        GotoBookmark(BMark);
+        WarnCount := WC; ErrorCount := EC;
+      end;
+    end else
+      Generator.PrintFragment(pos);
+  end;
+end;
+
+.)
+
+ semErrors = (.
+  200: Result := Format('Unknown parser target "%s"',[data]);
+ .)
+
+END
+
+IGNORECASE
+
+CHARACTERS
+letter=CHR('A')..CHR('Z')+'_'.
+digit=CHR('0')..CHR('9').
+control  = CHR(0) .. CHR(31) .
+stringCh = ANY - '"' - control.
+eol=CHR(13).
+lf=CHR(10).
+tab=CHR(9).
+
+
+TOKENS
+ident   = letter{letter|digit}.
+string  = '"' { stringCh } '"' .
+number  = digit { digit } .
+
+
+IGNORE tab+eol+lf
+
+PRODUCTIONS
+
+CocoCompiler =
+ "TARGET" TargetClause  (.if (Generator=nil) then Exit;.)
+ Body
+ EOF
+.
+
+TargetClause 
+(. var aClass: TParserGeneratorClass; .) =
+ ident  (. if not FindParserGeneratorClass(LexName,aClass) then
+           begin
+              SemError(200,LexName);
+              Exit;
+           end; 
+           if (Generator<>nil) then
+             if Generator.ClassType=aClass then Exit
+             else FreeAndNil(Generator);
+           Generator := aClass.Create;
+           Generator.Coco := Parser;
+        .)
+.
+
+Body =
+ { TemplateBlock }     (. PrintText; .)
+.
+
+TemplateBlock 
+(. var pred: Boolean; .) 
+ =        
+ "<|"                     
+    (  
+       '#' {ANY}
+     | '?'Predicate<pred> (. PushFlag; 
+                             GenFlag := GenFlag and pred;   .)
+     | "ELSE"             (. if PeakFlag then GenFlag := not GenFlag; .)
+     | "END" {ANY}        (. GenFlag := PopFlag; .)
+     | "ERROR"  string    (. if GenFlag then Parser.SemError(-1,LexString); .)
+     | '=' ident          (. if GenFlag then PrintVar(LexName);  .)
+     | '!' TargetCode
+     | '@' 
+         (  ident         (. if GenFlag then Parser.SetOutput(LexName); .)
+          | string        (. if GenFlag then Parser.SetOutputFilename(LexName); .)
+         )
+         ['(' Settings ')']
+    )                     (. PrintText; .)
+ "|>"                     
+.
+
+TargetCode =
+   'DeletablesList'  (. if GenFlag then Generator.PrintListOfDeletableSymbols;  .)
+ | 'FirstFollowList' (. if GenFlag then Generator.PrintStartFollowerSets;       .)
+ | 'XRefList'        (. if GenFlag then Generator.PrintXRef;                    .)
+ | 'Listing'         (. if GenFlag then
+                        with Generator do
+                        begin
+                          PrintLn(Format('%d errors and %d warnings',[Parser.ErrorCount,Parser.WarnCount]));
+                          PrintListing(getSortedErrors);
+                        end;.)
+ | 'SymbolTable'     (. if GenFlag then Generator.PrintSymbolTable;             .)
+ | 'States'          (. if GenFlag then Generator.PrintStates;                  .)
+ | 'Nodes'           (. if GenFlag then Generator.PrintNodes;                   .)
+ |   'Gramma'        (. if GenFlag then 
+                        with Parser.tab do 
+                        if gramSy<>nil then 
+                          Generator.Print(gramSy.Name); .)
+ | 'ParserDeclarations' (. if GenFlag then Generator.PrintParserDeclarations;   .)
+ | 'Tokens'             (. if GenFlag then Generator.PrintTokens;               .)
+ | 'InitStartStates'    (. if GenFlag then Generator.PrintInitStartStates;      .)
+ | 'Comments'           (. if GenFlag then Generator.PrintComments;             .)
+ | 'InitLiterals'       (. if GenFlag then Generator.PrintInitLiterals;         .)
+ | 'InitSymSets'        (. if GenFlag then Generator.PrintInitSymSets;          .)
+ | 'Errors'             (. if GenFlag then Generator.PrintErrors;               .)
+ | 'ScanSym'            (. if GenFlag then Generator.PrintScanSym;               .)
+ | 'IgnoreSet'          (. if GenFlag then Generator.PrintIgnoreSet;             .)
+ | 'ParserImplementation' (. if GenFlag then Generator.PrintParserImplementation;.)
+ | 'TokenStrings'       (. if GenFlag then Generator.PrintTokenStrings;          .)
+ | 'AnyAndSyncSets'     (. if GenFlag then Generator.PrintAnyAndSyncSets;        .)
+ | 'PRAGMAS'            (. if GenFlag then Generator.PrintPragmas;               .)
+ | 'NOSYM'              (. if GenFlag then 
+                           with Generator do Print(GenTokenName(Parser.tab.noSym.index));  .)
+ | ident
+.         
+
+Settings =
+ Param {',' Param}
+.
+
+Param 
+ = 
+   ident   
+ '=' (  string | number )    
+.
+
+Predicate< var value: Boolean >
+(. var v2: Boolean; .)
+ =  
+   BoolTerm<value>
+   {"OR" BoolTerm<v2>      (. value := Value or v2; .)
+   }
+.
+
+BoolTerm< var value: Boolean >
+(. var v2: Boolean; .)
+ =  
+  BoolFactor<value>
+  {  "AND" BoolFactor<v2> (. value := Value and v2; .)
+  }
+.
+
+BoolFactor< var value: Boolean > =
+    ident                    (. value := False; .)
+  | SystemPridicate<value>  
+  | "NOT"  BoolFactor<value> (. value := not value; .)
+  | "DEFINED" '(' ident      (. value := Parser.tab.TemplateVars[LexName]<>nil; .)
+    ')'  
+  | "TRUE"                   (. value := True; .)
+  | "FALSE"                  (. value := False; .)
+  | '(' Predicate<value> ')'
+.
+
+SystemPridicate<var value: Boolean> =
+    'Ok'              (. value := Parser.Successful;          .)
+  | 'DeletablesExist' (. value := Parser.tab.DeletableCount>0;.)
+  | 'IGNORECASE'      (. value := Parser.tab.IgnoreCase;      .)
+  | 'IgnoreSet'       (. with Parser.tab do 
+                         value := (IgnoredChars<>nil)and not IgnoredChars.IsEmpty; .)
+  |  'Comments'       (. value := Parser.DFA.CommentCount>0;.)
+  | 'InitSymSets'     (. value := Generator.hasSymSets;     .)
+  | 'HASHOMOGRAPH'    (. value := Parser.Tab.CountHomographs>0;.)
+  | 'GENSCANNER'      (. value := Parser.genScanner;        .)
+  | 'Pragmas'         (. value := Parser.Tab.PragmaCount>0; .)
+  | 'HASCTXMOVES'     (. value := Parser.DFA.HasCtxMoves;   .)
+  | 'HASWARNINGS'     (. value := Parser.WarnCount>0;       .)
+.
+
+
+END CocoCompiler.

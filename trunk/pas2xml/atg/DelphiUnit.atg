@@ -1,0 +1,1432 @@
+COMPILER DelphiUnit
+{W-}
+FRAME "delphiGen.frm"
+ header = (.
+{ Copyright (C) 2009, Serge Voloshenyuk
+  
+  This file is Free Software and part of DCocoR
+  
+  It is licensed under the following three licenses as alternatives:
+    1. GNU Lesser General Public License (LGPL) V2.1 or any newer version
+    2. GNU General Public License (GPL) V2 or any newer version
+    3. Apache License, V2.0 or any newer version
+  
+  You may not use this file except in compliance with at least one of
+  the above three licenses.
+  
+  See LICENSE.txt at the top of this package for the
+  complete terms and further detail along with the license texts for
+  the licenses in COPYING-LIB.txt, COPYING.txt and LICENSE-2.0.txt respectively.
+} 
+.)
+uses = (.SysUtils,StrUtils,StreamText,DelphiCond.)
+
+types =(.
+  TDirective = ( ddCdecl, ddRegister, ddDynamic, ddVirtual, ddExport, ddExternal, ddNear, ddFar, ddForward,
+                 ddOverride, ddOverload, ddPascal, ddReintroduce, ddSafecall, ddStdcall, ddVarargs, ddAbstract,
+                 ddInline, ddSssembler, ddStatic, ddFinal );
+  TDirectives = set of TDirective;
+.)
+ protected = (.
+   SubStreamCounter: Integer;
+   procedure IncludeFile(const Filename: String);
+   function ImplementsList(list: TStringList; from: Integer): String;
+ .)
+ public = (.
+   InPDir,IsProc,InPropSpec,InStruct,InStructHeader: Boolean;
+   PreProcessor: TDelphiCond;
+   BasePath: String;
+   prefix, GlobalAttrs: String;
+   function InSubRangeSet: Boolean;
+   procedure CheckHomograph(var sym: Integer); override;
+   procedure ProcessDelphiPragma(const str: String);
+   procedure Reinit; override;
+   procedure SetSourceFileName(const Filename: String); override;
+.)
+
+precreate = (.
+  PreProcessor := TDelphiCond.Create(Self);
+  with PreProcessor do
+  begin
+   Version := 190;
+   
+//for Delphi2009  
+//   Defines := PreProcessor.Defines +'UNICODE';
+//   Version := 200;
+  end;
+.)
+
+ implementation = (.
+ 
+function XMLEscape(const Str: string): string;
+begin
+  Result := Str;
+  if Pos('&',Result)>0 then
+    Result := StringReplace(Result, '&','&amp;',[rfReplaceAll]);
+  if Pos('<',Result)>0 then
+    Result := StringReplace(Result, '<','&lt;',[rfReplaceAll]);
+  if Pos('>',Result)>0 then
+    Result := StringReplace(Result, '>','&gt;',[rfReplaceAll]);
+  if Pos('"',Result)>0 then
+    Result := StringReplace(Result, '"','&quot;',[rfReplaceAll]);
+end;
+
+function FullIdent(const ns,name: String): String;
+begin
+  if ns<>'' then Result := Concat(ns,'.',name)
+  else Result := name;
+end;
+
+function NameToAttr(const ns,name,attr: String): String;
+begin
+  Result := Format(' %s="%s"',[attr,name]);
+  if ns<>'' then 
+    Result := Result+Format(' %s-scope="%s"',[attr,ns]);
+end;
+
+function FullNameToAttr(const name,attr: String): String;
+var I,J: Integer;
+    str,ns,name1: String;
+begin
+  I := Pos('&amp;',name);
+  if I>0 then str := Copy(name,1,I-1)
+  else str := name;
+  J := LastDelimiter('.', str);
+  if J>0 then
+  begin
+    ns := Copy(str,1,J-1);
+    name1 := Copy(name,J+1,Length(str));
+  end else begin
+    ns := '';
+    name1 := name;
+  end;
+  Result := NameToAttr(ns,name1,attr);
+end;
+
+
+function Directives2String(val: TDirectives): String;
+var I: TDirective;
+begin
+  Result := '';
+  if val=[] then Exit;
+  
+  for I:=Low(TDirective) to High(TDirective) do
+  if I in val then
+  case I of
+    ddCdecl:         Result := Result+' call="cdecl"';
+    ddRegister:      Result := Result+' call="register"';
+    ddDynamic:       Result := Result+' dynamic="true"';
+    ddVirtual:       Result := Result+' virtual="true"';
+    ddExport:        Result := Result+' export="true"';
+    ddExternal:      Result := Result+' external="true"';
+    ddNear:          Result := Result+' near="true"';
+    ddFar:           Result := Result+' far="true"';
+    ddOverride:      Result := Result+' override="true"';
+    ddOverload:      Result := Result+' overload="true"';
+    ddPascal:        Result := Result+' call="pascal"';
+    ddReintroduce:   Result := Result+' reintroduce="true"';
+    ddSafecall:      Result := Result+' call="safecall"';
+    ddStdcall:       Result := Result+' call="stdcall"';
+    ddVarargs:       Result := Result+' varargs="true"';
+    ddAbstract:      Result := Result+' abstract="true"';
+    ddInline:        Result := Result+' inline="true"';
+    ddSssembler:     Result := Result+' sssembler="true"';
+    ddStatic:        Result := Result+' static="true"';
+    ddFinal:         Result := Result+' final="true"';
+  end;
+end;
+
+procedure TDelphiUnit.CheckHomograph(var sym: Integer);
+begin
+  if ((sym=ABSTRACTSym)and not (IsProc or InStructHeader)) or
+     ((sym=DISPIDSym)and not(IsProc or InPropSpec)) or
+     ((sym in [deprSym..absSym])and not InPDir) or
+     ((sym in [CDECLSym..FINALSym])and not IsProc) or
+     ((sym in [HELPERSym,SEALEDSym])and not InStructHeader) or
+     ((sym in [STRICTSym..PUBLISHEDSym])and not InStruct) or
+     ((sym in [INDEXSym..WRITEONLYSym])and not InPropSpec)
+  then sym := identSym;
+end; 
+ 
+procedure TDelphiUnit.SetSourceFileName(const Filename: String);
+begin
+  inherited;
+  BasePath := ExtractFilePath(Filename);
+  Outputs['STDOUT'] := TFileStream.Create(ChangeFileExt(ExtractFileName(FileName), '.xml'),fmCreate);
+  SetOutput('STDOUT');
+end;
+
+procedure TDelphiUnit.IncludeFile(const Filename: String);
+var fn: String;
+    BMark, OldSrc,OldBase: String;
+    WC,EC : Integer;
+begin
+  fn := ExpandFileName(BasePath+Filename);
+  if FileExists(fn) then
+  begin
+    WC := WarnCount; EC := ErrorCount;
+    BMark := Bookmark;
+    OldSrc := Scanner.Source;
+    try
+      inherited SetSourceFileName(fn);
+      OldBase := BasePath;
+      BasePath := ExtractFilePath(Filename);
+      _InterfaceBody;
+    finally
+      Scanner.SetSource(OldSrc);
+      GotoBookmark(BMark);
+      BasePath := OldBase;
+      WarnCount := WC; ErrorCount := EC;
+    end;
+  end;
+end;
+ 
+procedure TDelphiUnit.Reinit;
+begin
+  inherited;
+  with PreProcessor do
+  begin
+    Version := 200;
+  end;  
+  InPDir := False; IsProc := False; InStruct := False; InStructHeader := False;
+end;
+ 
+function TDelphiUnit.InSubRangeSet: Boolean;
+begin
+
+  Result := ((CurrentInputSymbol=identSym)and(MatchStr(LexNames[1],['HIGH','LOW','SIZEOF'])))
+        or
+           ((Symbols[2]^.Id) in [_point_pointSym,_plusSym,_minusSym,
+                    _greater_equalSym,_less_greaterSym,ORSym,XORSym,_starSym,
+                    _slashSym,DIVSym,MODSym,ANDSym,SHLSym,SHRSym]);
+end;
+
+procedure TDelphiUnit.ProcessDelphiPragma(const str: String);
+
+  function DelphiCond(var aName: String): Integer;
+  begin
+    Result := 0;
+    if Pos('{$IFDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 1;
+    end else if Pos('{$IFNDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 2;
+    end else if Pos('{$IFEND',aName)=1 then
+      Result := 6
+    else if Pos('{$IFOPT',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 9;
+    end else if Pos('{$IF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,5,Length(aName)-5));
+      Result := 7;
+    end else if Pos('{$INCLUDE',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,10,Length(aName)-10));
+      Result := 10;
+    end else if Pos('{$I',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,4,Length(aName)-4));
+      Result := 10;
+    end else if Pos('{$DEFINE',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 3;
+    end else if Pos('{$UNDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 4;
+    end else if Pos('{$ELSEIF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 8;
+    end else if Pos('{$ELSE',aName)=1 then
+      Result := 5
+    else if Pos('{$ENDIF',aName)=1 then
+      Result := 6;
+  end;
+
+  procedure Skip;
+  var rec: TSymbolRec;
+      id: String;
+      c: Integer;
+  begin
+    c := 1;
+    while True do
+    begin
+      repeat
+        Scanner.Get(rec);
+      until rec.Id in [_EOFSYMB,DelphiPragmaSym];
+      if rec.Id =_EOFSYMB then
+        Exit;
+
+      id := Scanner.getSymbolText(@rec);
+      case DelphiCond(id) of
+        1,2:  Inc(C);
+        5:  if c=1 then Break;
+        6:  begin
+             Dec(c);
+             if c=0 then Break;
+            end;
+        8: if (c=1)and PreProcessor.Evaluate(id) then
+              Break;
+      end;
+    end;
+  end;
+
+var id: String;
+begin
+  id := str;
+  with PreProcessor do
+  case DelphiCond(id) of
+    1: if not Defined[id] then Skip;
+    2: if Defined[id] then Skip;
+    3: Defined[id] := True;
+    4: Defined[id] := False;
+    5: Skip;
+    7,8: if not Evaluate(id) then Skip;
+    10: IncludeFile(id);
+  end;
+end;
+
+function TDelphiUnit.ImplementsList(list: TStringList; from: Integer): String;
+var I: Integer;
+begin
+  Result := '';
+  if (list<>nil)and(list.Count>from) then
+  begin
+    for I:=from to list.Count-1 do
+        Result := Format('%s<interface %s/>',[Result,FullNameToAttr(list[I],'name')]);
+    Result := Format('%s   <implements>%s</implements>'#13#10,[prefix,Result]);
+  end;
+  list.Free;
+end;
+.)
+END
+
+
+IGNORECASE
+
+CHARACTERS
+letter="ABCDEFGHIJKLMNOPQRSTUVWXYZ_".
+digit="0123456789".
+hexdigit = digit + "ABCDEF".
+special = "+-*/=<>[].,():;^@{}$#".
+ctrl=CHR(1)..CHR(31).
+tab=CHR(9).
+eol=CHR(13).
+lf=CHR(10).
+norbrace = ANY-'}'.
+noquote=ANY-"'" -ctrl.
+
+TOKENS
+ident = letter{letter|digit}.
+number = digit{digit} | digit { digit } CONTEXT ( ".." ).
+string = ("'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit}))
+         {"'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit})}.
+float = digit{digit}
+        (  "." {digit}
+           [ "E"
+            ["+" |"-"]
+            digit{digit}
+           ]
+          |"E"["+"|"-"]digit{digit}
+        ).
+hexnumber = "$" hexdigit {hexdigit}.
+_scl = ";".
+str = "STRING".
+cntr = "CONSTRUCTOR".
+destr = "DESTRUCTOR".
+intf = "INTERFACE".
+dintf = "DISPINTERFACE".
+ress = "RESOURCESTRING".
+proc = "PROCEDURE".
+impl = "IMPLEMENTATION".
+depr = HOMOGRAPH "DEPRECATED".
+plfm = HOMOGRAPH "PLATFORM".
+lib = HOMOGRAPH "LIBRARY".
+abs = HOMOGRAPH "ABSOLUTE".
+
+HOMOGRAPHS
+    
+ "STRICT" "PRIVATE" "PROTECTED" "PUBLIC" "PUBLISHED"
+
+ "CDECL" "REGISTER" "DYNAMIC" "VIRTUAL" "EXPORT" "EXTERNAL" "NEAR" "FAR"
+ "FORWARD" "OVERRIDE" "OVERLOAD" "PASCAL" "REINTRODUCE" "SAFECALL"
+ "STDCALL" "VARARGS" "INLINE" "ASSEMBLER" "STATIC" "MESSAGE" "FINAL" 
+
+ "ABSTRACT" "HELPER" "SEALED"
+ 
+ "INDEX" "DEFAULT" "READ" "WRITE" "STORED" "IMPLEMENTS"
+ "NODEFAULT" "READONLY" "WRITEONLY"
+ 
+ "DISPID"
+
+
+IGNORE tab+lf+eol
+PRAGMAS
+ DelphiPragma = "{$" {norbrace} '}'.  (. ProcessDelphiPragma(LexNames[1]); .)
+
+
+COMMENTS FROM '{' TO '}'
+COMMENTS FROM "(*" TO "*)"
+COMMENTS FROM "//" TO eol
+
+PRODUCTIONS
+
+DelphiUnit
+(.var ns,name: String; port: String;.) =
+  "UNIT"                        (.InPDir:=True;
+                                  WriteLn(Output,'<?xml version="1.0"?>');
+                                .)
+  Qualident<ns,name>            (.InPDir:=True; port := ''; .)
+  { PortabilityDirective<port> }
+                                (.InPDir:=False;
+                                  WriteLn(Output,Format('<delphi_xml name="%s"%s>',
+                                   [FullIdent(ns,name),port]));
+                                  prefix := '  '; GlobalAttrs := '';
+                                .)
+  ";"
+
+  "INTERFACE"
+  InterfaceBody
+  "IMPLEMENTATION"
+                                (.WriteLn(Output,'</delphi_xml>'); 
+                                  ClearOutputs;
+                                  Exit; .)
+.
+
+InterfaceBody =
+  [ "USES"
+    UsesClause ';'
+  ]
+  {SYNC InterfaceDecl}
+.
+
+UsesClause
+(.var list: TStringList; I: Integer;.) =
+                                (.list := TStringList.Create;.)
+  QualidentList<list>
+                                (.for I:=0 to list.Count-1 do
+                                     WriteLn(Output,prefix,Format('<use ref="%s"/>',[list[I]]));
+                                  list.Free;.)
+.
+
+InterfaceDecl =
+    (   "CONST"
+        ConstantDecl {ConstantDecl}
+      | "VAR"
+        VarDecl {VarDecl}
+    )
+  | "TYPE"  TypeDecl {TypeDecl}
+  | ExportedHeading
+  | (.InPDir:=True;.)
+    "resourcestring"
+    ResourceString {ResourceString}(.InPDir:=False;.)
+.
+
+TypeId<out ns,name: String> =
+   GQualident<ns,name>
+ | "STRING" (.ns:=''; name := 'string';.)
+.
+
+ConstantDecl
+(.var cname,val,valbody: String; 
+   tname,tbody,port: String;
+   tail: Char;.) =
+  ident                           (.cname := LexString; .)
+  (
+      ':' Type<tname,tbody>
+      '=' ConstExprOrStructConst<val,valbody>
+    | '=' ConstExpr<val>          (.valbody:='';.)
+  )
+                                  (.InPDir:=True; port := '';.)
+  { PortabilityDirective<port> }  (.
+                                    if val<>'' then val := Format(' value="%s"',[val]);
+                                    if (valbody<>'')or(tbody<>'') then
+                                      tail := ' '
+                                    else tail := '/';  
+                                    WriteLn(Output,prefix,'<const name="',cname,'"',
+                                       tname,val,GlobalAttrs,port,tail,'>');
+                                    if valbody<>'' then Write(Output,valbody);
+                                    if tbody<>'' then Write(Output,tbody);
+                                    if tail=' ' then  WriteLn(Output,prefix,'</const>');
+                                    InPDir:=False;.)
+ ';'
+.
+
+ConstExprOrStructConst<out val,valbody: String>
+(.var id,subval,subbody: String;
+  procedure ConcatSubVal(const id: String);
+  var str: String;
+  begin
+    if id<>'' then str := Format(' name="%s"',[id]);
+    if subbody<>'' then  str := Format(#10#13'%s'#9'<item%s>%s'#10#13#9'</item>',[prefix,str,subbody])
+    else str := Format(#10#13'%s'#9'<item%s value="%s"/>',[prefix,str,subval]);
+    valbody := valbody+str;
+  end;
+.) =
+                                                         (.val:='';valbody:='';.)
+   '('                                                   (.valbody := #10#13+prefix+'  <value>';.)
+     (
+         IF(. Symbols[2]^.id=_colonSym .)
+         ident                                           (.id:=LexString;    .)
+         ':' ConstExprOrStructConst<subval,subbody>      (.ConcatSubVal(id); .)
+         { ';'
+           (  ident                                      (.id:=LexString;    .)
+              ':' ConstExprOrStructConst<subval,subbody> (.ConcatSubVal(id); .)
+            | (.Break;.)
+           )
+         }
+       | ConstExprOrStructConst<subval,subbody>          (.ConcatSubVal('');.)
+         {',' ConstExprOrStructConst<subval,subbody>}    (.ConcatSubVal('');.)
+     )
+   ')'                                                   (.valbody := valbody+#10#13+prefix+'  </value>'#10#13;.)
+ | ConstExpr<val>
+.  
+
+
+TypeDecl
+(.var dirs: TDirectives; 
+     id,type_,tattr,tbody,spec: String;
+.) =
+   { DotNetAttr }
+   ident                                   (.id := LexString;
+                                             dirs := []; spec := '';
+                                             tattr:=''; tbody:='';
+                                             type_ := 'type';
+                                           .)
+   [ GenericDecl<spec> ]
+   "="
+   (
+      IF(.Symbols[2]^.Id<>OFSym.)
+      "CLASS"
+      ClassType<spec,tbody>               (.type_ := 'class';
+                                            if (spec='')and(tbody='') then
+                                              Include(dirs,ddForward);
+                                          .)
+    | "OBJECT"
+      ObjectType<spec,tbody>              (.type_ := 'object';
+                                            if (spec='')and(tbody='') then
+                                              Include(dirs,ddForward);
+                                          .)
+    | (   "INTERFACE"                     (.type_ := 'interface';.)
+        | "DISPINTERFACE"                 (.type_ := 'dispinterface';.)
+      )
+      InterfaceType<spec,tbody>           (.if (spec='')and(tbody='') then Include(dirs,ddForward); .)
+    | ["TYPE" (.spec := ' newtype="true"';.) ] 
+      Type<tattr,tbody>
+   )
+                                           (.if not IsProc then InPDir:=True;.)
+   (
+      IF(.not IsProc.)
+      { PortabilityDirective<spec> }
+                                           (.InPDir:=False;.)
+      ';'
+    | ';'
+      [ Directive<dirs> {Directive<dirs>}';']
+                                           (.IsProc:=False;.)
+   )                                       (. if not(ddForward in dirs) then
+                                              begin
+                                                if tbody='' then
+                                                  spec := spec+'/';
+                                                WriteLn(Output,prefix,Format('<%s name="%s"',[type_,id]),
+                                                    tattr,Directives2String(dirs),spec,GlobalAttrs,'>');
+                                                if tbody<>'' then
+                                                begin
+                                                  Write(Output,tbody);
+                                                  WriteLn(Output,prefix,Format('</%s>',[type_]));
+                                                end;    
+                                              end;  
+                                           .)
+.  
+
+VarDecl
+(.var dirs: TDirectives;
+    vars: TStringList;
+    I: Integer;
+    val,valbody,tattr,tbody,spec: String;.) =
+                                         (.vars := TStringList.Create;
+                                           dirs := [];
+                                           val := ''; spec := '';
+                                         .)
+  IdentList<vars>
+  ":"
+  Type<tattr,tbody>
+  (.if not IsProc then InPDir:=True;.)
+  (
+     IF(.not IsProc.)
+     (
+          "ABSOLUTE" ident               (.spec:=Format(' absolute="%s"',[LexString]);.)
+        | { PortabilityDirective<spec> }
+          (.InPDir:=False;.)
+          [
+            "=" ConstExprOrStructConst<val,valbody>
+          ]
+     )
+    ';'
+   |
+    (
+       "=" ConstExpr<val> ';'            
+     |
+       ';'
+       [  Directive<dirs> {Directive<dirs>}
+
+          ["=" ConstExpr<val>]
+          ';'
+       ]
+    )
+  )                                      (.IsProc:=False;
+                                           if val<>'' then val := Format(' value="%s"',[val]);
+                                           if (valbody='')and(tbody='') then
+                                             spec := spec+'/';
+                                           for I :=0 to vars.Count-1 do
+                                           begin
+                                             WriteLn(Output,prefix,'<var name="',
+                                                  vars[I],'" ',tattr,val,spec,GlobalAttrs,'>');
+                                             if tbody<>'' then Write(Output,tbody);   
+                                             if valbody<>'' then Write(Output,valbody);
+                                             if (valbody<>'')or(tbody<>'') then
+                                               WriteLn(Output,prefix,'</var>');
+                                           end;
+                                           vars.Free;
+                                         .)
+.
+
+
+Type<out attr, body : String>
+(.var ns,name: String;.) =                         (.attr:=''; body:='';.)
+ (
+     "STRING"                                      (.attr:=' type="string"';.)
+     [ "[" ConstExpr<ns> "]"                       (.body:=Format('%s <string size="%s"/>'#13#10,[prefix,ns]); attr:='';.)
+     ]
+  |  EnumeratedType<body>
+  |  IF(.LexNames[1]='REFERENCE'.)ident 
+     "TO" ProcedureType<body>                      (.body:=Format('%s  <ref>%s'#13#10'%s  </ref>',[prefix,body,prefix]);.)
+  |  "^" TypeId<ns,name>                           (.body := Format('%s <pointer %s/>'#13#10,[prefix,NameToAttr(ns,name,'type')]);.)
+  |  IF(. not InSubRangeSet.)
+     GQualident<ns,name>                           (.attr:= NameToAttr(ns,name,'type');.)
+     [ IF(.LexName='ANSISTRING'.) 
+       "(" (number | hexnumber)                    (.body:=Format('%s <ansistring codepage="%s"/>'#13#10,[prefix,LexString]); 
+                                                     attr:='';.)
+       ")"
+     ]
+  |  SubrangeType<body>
+  |  StrucType<body>
+  |  ProcedureType<body>
+  |  "CLASS" "OF" Qualident<ns,name>               (.body := Format('%s  <class-of %s/>'#13#10,[prefix,NameToAttr(ns,name,'type')]);.)
+ ) 
+.  
+
+
+EnumeratedType<out val: String>
+(.var item: String;.) =
+                                        
+ '(' EnumeratedTypeElement<val>        
+     {',' EnumeratedTypeElement<item>  (.val:=val+item;.)
+     }
+ ')'                                   (.val:=Format('%s <enum>%s</enum>'#13#10,[prefix,val]);.)
+.
+EnumeratedTypeElement<out val: String>
+(.var id: String;.) =
+  ident                (.id := LexString; val := '';.)
+  [ '=' ConstExpr<val>
+  ]                    (.if val<>'' then val := Format(' value="%s"',[val]);
+                         val := Format('<item id="%s"%s/>',[id,val]);.)
+.
+
+SubrangeType<out val: String>
+(.var from_,to_: String;.) = 
+ ConstExpr<from_> ".." ConstExpr<to_>  
+ (.val := Format('%s <range from="%s" to="%s"/>'#13#10,[prefix,from_,to_]);.)
+.
+
+StrucType<out body: String>
+(.var struct,attr,spec,ns,name: String;.) = 
+                         (.spec:='';body:='';attr:='';.)
+  ["PACKED"              (.spec:=' packed="true"';.)
+  ] 
+  (  ArrayType<attr,body>(.struct:='array';.)
+   | SetType<attr,body>  (.struct:='set';.)
+   | FileType<attr,body> (.struct:='file';.)
+   |                     (.InStruct:=True; InStructHeader := True;.)
+     "RECORD"            (.struct:='record';.)
+     [   "HELPER" "FOR" GQualident<ns,name>
+                         (.spec := spec+NameToAttr(ns,name,'helper');.)
+     ]                   (.InStructHeader := False;.)
+     [RecBody<body>]     
+  )                      (.spec := Concat(prefix,'  <',struct,' ',attr,spec);
+                           if body='' then
+                             body := Concat(spec,'/>'#13#10)
+                           else body := Concat(spec,'>'#13#10,body,prefix,'  </',struct,'>'#13#10);
+                         .)
+.  
+
+SetType<out attr,body: String> =
+                                   (.attr:='';.)
+ "SET" "OF"
+(
+  IF(. InSubRangeSet.)
+   SubrangeType<body>
+ | EnumeratedType<body>
+ | Qualident<body,attr>            (.if body<>'' then body := Format(' type-scope="%s"',[body]);
+                                     attr:= Format(' type="%s"%s',[attr,body]); 
+                                     body:='';.)
+) 
+.
+
+FileType<out attr,body: String> = 
+"FILE" "OF" Type<attr,body>
+.
+
+
+ArrayType<out attr,body: String>
+(.var dirs: TDirectives; idx: String;.) =
+                              (.dirs:=[]; idx:='';.)
+  "ARRAY"
+  [ '[' ArrayIndexType<idx>
+        {','ArrayIndexType<idx>}
+    ']'
+  ]
+  "OF" Type<attr,body>
+  [ IF(.IsProc and (Abs(Symbols[2]^.id) in [CDECLSym..ASSEMBLERSym]).)
+    ';' Directive<dirs> {Directive<dirs>}
+
+  ]                           (.IsProc:=False;
+                                if dirs<>[] then
+                                attr := attr+Directives2String(dirs);
+                                if idx<>'' then
+                                body := Concat(prefix,'  <index>'#13#10,idx,prefix,'  </index>'#13#10,body);
+                              .)
+.
+
+ArrayIndexType<var val: String>
+(.var ns,name: String;.) = 
+ (  EnumeratedType<ns>        (.name := Concat(prefix,'    <param>'#13#10,ns,prefix,'    </param>'#13#10);.)
+  | IF(. not InSubRangeSet.)
+    Qualident<ns,name>        (.name := Format('%s    <param %s/>'#13#10,[prefix,NameToAttr(ns,name,'type')]);.)
+  | SubrangeType<ns>          (.name := Concat(prefix,'    <param>'#13#10,ns,prefix,'    </param>'#13#10);.)
+ )                            (.val:=Concat(val,name);.)
+. 
+
+
+ClassSpec =
+                  (.GlobalAttrs := '';.)
+  ["STRICT"       (.GlobalAttrs := ' strict="true"';   .) 
+  ]
+  (  "PRIVATE"    (.GlobalAttrs := GlobalAttrs+' private="true"';  .)
+    |"PROTECTED"  (.GlobalAttrs := GlobalAttrs+' protected="true"';.)
+    |"PUBLIC"     (.GlobalAttrs := GlobalAttrs+' public="true"';   .)
+    |"PUBLISHED"  (.GlobalAttrs := GlobalAttrs+' published="true"';.)
+  )
+.
+
+RecBody<out body: String>
+(.var bodyStream: TStream; oldprefix,oldGlobal: String; isClass: Boolean;.)
+ =  
+        (.bodyStream := TStringStream.Create('');
+          SwapStreamUnderTextFile(Output,bodyStream);
+          oldprefix := prefix; prefix := prefix+'  ';
+          oldGlobal := GlobalAttrs; GlobalAttrs := '';
+        .)
+  { 
+    ClassSpec
+   | 
+    (.InStruct:=False;.)
+    (   "CONST"
+        ConstantDecl    (.InStruct:=True;.) {(.InStruct:=False;.)ConstantDecl(.InStruct:=True;.)} 
+      | "TYPE" TypeDecl (.InStruct:=True;.) {(.InStruct:=False;.)TypeDecl(.InStruct:=True;.)}    
+      | ( "CLASS"(.isClass:=True;.)|(.isClass:=False;.) )
+        (
+            ["VAR"] FieldDecl<isClass>
+            ( ';'| (.Break.) )
+          | MethodHeading<isClass>
+          | Property<isClass>
+        )
+      | "CASE" VariantSection
+         [';'](.Break.)
+    ) (.InStruct:=True;.)
+  }
+        (.InStruct:=False;
+          SwapStreamUnderTextFile(Output,bodyStream);
+          body := TStringStream(bodyStream).DataString;
+          bodyStream.Free;
+          prefix := oldprefix;
+          GlobalAttrs := oldGlobal;
+        .) 
+  "END"
+.
+
+
+VariantSection
+(.var ns,ns1,name,name1,attr,oldprefix: String;.) =
+  Qualident<ns,name>         (.attr:='';.)
+  [':' Qualident<ns1,name1>  (.attr := NameToAttr(ns1,name1,'type');.)
+  ]                          (.if attr<>'' then
+                                 attr := Format(' var="%s"%s',[name,attr])
+                               else attr := NameToAttr(ns,name,'type');
+                               WriteLn(Output,prefix,'<variant-part',attr,'>');
+                               oldprefix := prefix; prefix := prefix+'  ';
+                             .)
+  "OF" RecVariant  { ';' ( RecVariant | (.Break;.) )  }
+                             (.prefix := oldprefix;
+                               WriteLn(Output,prefix,'</variant-part>');
+                             .)
+.
+
+FieldList =
+  {
+      FieldDecl<False>
+      ( ';'| (.Break.) )
+    | "CASE" VariantSection
+      [';'](.Break.)
+  }
+. 
+
+RecVariant
+(.var lab,lab2,oldprefix: String;.) =
+  ConstExpr<lab> 
+  {','ConstExpr<lab2>    (.lab:=Concat(lab,',',lab2).)
+  }                      (.WriteLn(Output,prefix,Format('<case of="%s">',[lab]));
+                           oldprefix := prefix; prefix := prefix+'  ';
+                         .)
+  ':' '(' FieldList ')'  (.prefix:=oldprefix; WriteLn(Output,prefix,'</case>');.)
+.
+
+
+FieldDecl<isClass: Boolean>
+(.var dirs: TDirectives;
+  tattr,tbody,spec,sufix: String;
+  vars: TStringList; I: Integer;
+.) =
+                                          (.vars := TStringList.Create;spec:='';dirs:=[];.)
+  IdentList<vars> ':' Type<tattr,tbody>
+  (.if not IsProc then InPDir:=True;.)
+  (
+      IF(.not IsProc.)
+      { PortabilityDirective<spec> }
+      (.InPDir:=False;.)
+    |
+      [ IF(.Abs(Symbols[2]^.id) in [CDECLSym..ASSEMBLERSym].)
+        ';'Directive<dirs> {Directive<dirs>}
+
+      ]
+      (.IsProc:=False;.)
+  )                                       (.
+                                           if tbody='' then sufix := '/' else sufix := '';
+                                           if isClass then tattr := tattr+' class="true"';
+                                           for I :=0 to vars.Count-1 do
+                                           begin
+                                             WriteLn(Output,prefix,'<var name="',vars[I],'" ',
+                                                  tattr, GlobalAttrs,
+                                                  Directives2String(dirs),
+                                                  spec,sufix,'>');
+                                             if tbody<>'' then
+                                             begin
+                                               WriteLn(Output,tbody);   
+                                               WriteLn(Output,prefix,'</var>');
+                                             end; 
+                                           end;
+                                           vars.Free;
+                                          .)
+.
+
+ClassType<out spec, body: String>
+(.var ns: String; list: TStringList; .) =
+                                   (.body:=''; spec:=''; 
+                                     list := nil; 
+                                     InStruct:=True; InStructHeader := True;
+                                   .)
+   [   "HELPER" "FOR" GQualident<ns,spec>
+                                   (.spec := NameToAttr(spec,ns,'helper');.)
+     | "ABSTRACT"                  (.spec:=' abstract="true"';.)
+     | "SEALED"                    (.spec:=' sealed="true"';.)
+   ] (.InStructHeader := False;.)
+   [ '(' GQualidentList<list> ')'  (.if list.Count>=1 then spec:=FullNameToAttr(list[0],'base')+spec;.)
+   ]
+   [ClassBody<body>]               (.body := Concat(ImplementsList(list,1), body);.)
+.
+
+ObjectType<out spec,body: String> 
+(.var list: TStringList;.) =
+                                   (.body:=''; spec:=''; list:=nil; InStruct:= True;.)
+   [ '(' QualidentList<list> ')'   (.if list.Count>=1 then spec:=Format('base="%s"',[list[0]]);.)
+   ]
+  [ClassBody<body>]                (.body := ImplementsList(list,1)+body;.)
+.
+
+
+InterfaceType<out spec,body: String>
+(.var ns,base,guid,oldprefix,oldGlobal: String;
+  bodyStream: TStream;
+.) =
+                                   (.spec:='';body:=''; bodyStream := nil;.)
+   [
+     [ "(" GQualident<ns,base> ")" (.spec := NameToAttr(ns,base,'base');.)
+     ]
+     [ "["  ( string               (.guid:=DequotedStr(LexString);.)
+             |ident                (.guid:=LexString;.)
+            )  "]"                 (.spec := Format('%s guid="%s"',[spec,guid]);.)
+     ]
+     {                             (.if bodyStream=nil then
+                                     begin
+                                       bodyStream := TStringStream.Create('');
+                                       SwapStreamUnderTextFile(Output,bodyStream);
+                                       oldprefix := prefix; prefix := prefix+'    ';
+                                       oldGlobal := GlobalAttrs; GlobalAttrs := '';
+                                     end;
+                                   .)
+         IMethodHeading
+       | Property<False>
+     }
+     "END"                         (.if bodyStream<>nil then
+                                     begin
+                                       SwapStreamUnderTextFile(Output,bodyStream);
+                                       body := TStringStream(bodyStream).DataString;
+                                       bodyStream.Free;
+                                       prefix := oldprefix;
+                                       GlobalAttrs := oldGlobal;
+                                     end;
+                                   .)
+   ]
+.
+
+ClassBody<out body: String>
+(.var bodyStream: TStream; oldprefix,oldGlobal: String; isClass: Boolean;.)
+ =  
+        (.bodyStream := TStringStream.Create('');
+          SwapStreamUnderTextFile(Output,bodyStream);
+          oldprefix := prefix; prefix := prefix+'    ';
+          oldGlobal := GlobalAttrs; GlobalAttrs := '';
+        .)
+  { 
+     ClassSpec
+    | 
+     (.InStruct:=False;.)
+     ( "CONST"
+          ConstantDecl   (.InStruct:=True;.) { (.InStruct:=False;.)ConstantDecl(.InStruct:=True;.)} 
+      | "TYPE"  TypeDecl (.InStruct:=True;.) {(.InStruct:=False;.)TypeDecl(.InStruct:=True;.)}    
+      | ( "CLASS"(.isClass:=True;.)|(.isClass:=False;.) )
+        (
+            ["VAR"] ObjFieldDecl<isClass>
+          | MethodHeading<isClass>
+          | Property<isClass>
+        )
+     ) (.InStruct:=True;.)
+  }
+        (.InStruct:=False;
+          SwapStreamUnderTextFile(Output,bodyStream);
+          body := TStringStream(bodyStream).DataString;
+          bodyStream.Free;
+          prefix := oldprefix;
+          GlobalAttrs := oldGlobal;
+        .) 
+  "END"
+.
+
+
+ProcedureType<out body: String>
+(.var dirs: TDirectives;
+   type_,ns,tname,params,spec: String;.) =
+                                             (.spec:='';.)
+ (  "PROCEDURE" [FormalParameters<params>]   (.type_:='procedure'; tname:='';.)
+  | "FUNCTION"  [FormalParameters<params>]
+    ':' TypeId<ns,tname>                     (.type_:='function';
+                                               tname := NameToAttr(ns,tname,'return');
+                                             .)
+ ) ["OF" "OBJECT"                            (.spec:=' method="true"';.)
+   ]
+ (.IsProc:=True;.)
+ {Directive<dirs>}                           (.body := Concat(prefix,'  <',type_,spec, tname,
+                                                 Directives2String(dirs));
+                                               if params<>'' then
+                                                 body := Concat(body,'>'#13#10,params,prefix,Format('  </%s>'#13#10,[type_]))
+                                               else body := body+'/>'#13#10;
+                                             .)                     
+.       
+
+ExportedHeading
+(.var dirs: TDirectives;
+  id,ns,name,type_,body,spec: String;
+.) =                                 (.body:=''; name:='';spec:='';dirs:=[];.)
+  (   "PROCEDURE" ident              (.type_:='procedure'; id :=LexString;.)
+      [FormalParameters<body>]
+    | "FUNCTION"  ident              (.type_:='function'; id := LexString;.)
+      [FormalParameters<body>] ':' 
+      TypeId<ns,name>                (.name := NameToAttr(ns,name,'return');.)
+  )
+  (.IsProc:=True;.)
+  {Directive<dirs>}
+  (.InPDir:=True;.) 
+  {
+    ';'
+     (
+          PortabilityDirective<spec>
+        | Directive<dirs>
+        | (.Break.)
+     )
+     {
+          PortabilityDirective<spec>
+        | Directive<dirs>
+     }
+  }     (.IsProc:=False; InPDir:=False;
+          Write(Output,prefix,Format('<%s name="%s"',[type_,id]),name, 
+                Directives2String(dirs),spec);
+          if body<>'' then
+          begin
+            WriteLn(Output,'>');
+            Write(Output,body);
+            WriteLn(Output,prefix,Format('</%s>',[type_]));
+          end else WriteLn(Output,'/>');
+        .) 
+.
+
+FormalParameters<out body: String> =
+      (.body:='';.)
+  '('                             
+    [FormalParm<body> {';'FormalParm<body>}]
+  ')'
+.
+
+FormalParm<var body: String>
+(.var def,spec,str: String;
+  ns,tname,tbody: String;
+  list: TStringList; I: Integer;
+.) =
+                            (.list := TStringList.Create;
+                              def:=''; spec:='';tname:='';tbody:='';
+                            .)
+  [  "VAR"                  (.spec := ' as="var"';.)
+   | "CONST"                (.spec := ' as="const"';.)
+   | "OUT"                  (.spec := ' as="out"';.)
+   | "IN"                   (.spec := ' as="in"';.)
+  ] 
+  IdentList<list>
+  [
+    ':'
+    (
+       "ARRAY" "OF" 
+       (   "CONST"          (.tbody:= Concat(#13#10,prefix,'    <array type="const"/>'#13#10);.)
+         | TypeId<ns,tname> (.tbody := Format(#13#10'%s    <array%s/>'#13#10,[prefix,NameToAttr(ns,tname,'type')]);
+                              tname:='';
+                            .)
+       )
+     | TypeId<ns,tname>     (.tname := NameToAttr(ns,tname,'type');.)
+       ['=' ConstExpr<def>  (.def:=Format(' default="%s"',[def]);.)
+       ]
+    )
+
+  ]                         (.for I:=0 to list.Count-1 do
+                              begin
+                                 str := Format('%s  <param%s name="%s"%s%s',[prefix,spec,list[I],tname,def]);
+                                 if tbody<>'' then str := Format('%s>%s%s  </param>'#13#10,[str,tbody,prefix])
+                                 else str := str+'/>'#13#10;
+                                 body := body+str;
+                              end;                
+                              list.Free;.)
+.                                            
+
+MethodHeading<isClass: Boolean>
+(.var id,id1,type_,ns,attr,spec: String;
+   dirs: TDirectives;
+   msg,params: String;
+.) =
+ { DotNetAttr }                               (.spec := ''; dirs := [];
+                                                params := ''; attr := ''; msg := '';
+                                              .)
+(
+   "PROCEDURE"
+   (
+     ident                                    (.type_:='procedure'; id :=LexString;.)
+     [GenericDecl<attr>]
+     (
+        [FormalParameters<params>]
+      | '.'Qualident<ns,id1> '=' ident        (.if ns<>'' then ns := Format('%s.%s',[id,ns])
+                                                else ns := id;
+                                                id := id1;
+                                                type_ := 'procedure-alias';
+                                                attr := Format(' interface="%s" ref="%s"',[ns,LexString]);
+                                              .)
+     )
+   )
+ | (
+       IF(.LexNames[1]='OPERATOR'.) ident     (.type_:='operator'; .)
+     | "FUNCTION"                             (.type_:='function'; .)
+   )
+   (
+     ident                                    (.id := LexString;.)
+     [GenericDecl<attr>]
+     (
+        [FormalParameters<params>] ':' 
+        TypeId<ns,id1>                        (.attr := attr+NameToAttr(ns,id1,'return');.)
+      | '.'Qualident<ns,id1> '=' ident        (.if ns<>'' then ns := Format('%s.%s',[id,ns])
+                                                else ns := id;
+                                                id := id1;
+                                                type_ := 'function-alias';
+                                                attr := Format(' interface="%s" ref="%s"',[ns,LexString]);
+                                              .)
+     )
+   )
+ | "CONSTRUCTOR" ident                        (.type_:='constructor'; id :=LexString;.)
+   [FormalParameters<params>]
+ | "DESTRUCTOR"  ident                        (.type_:='destructor'; id :=LexString;.)
+   [FormalParameters<params>]
+) (.IsProc:=True;.)
+  {Directive<dirs>} 
+  (.InPDir := True;.)
+  {
+    ';'
+     (    PortabilityDirective<spec>
+        | Directive<dirs>
+        | "MESSAGE" ConstExpr<msg>            (.attr := Format('%s message="%s"',[attr,msg]); .)
+        | (.Break.)
+     )
+  }     (.IsProc:=False; InPDir := False;
+          if isClass then attr := attr+' class="true"';
+          Write(Output,prefix,Format('<%s name="%s"',[type_,id]),attr, 
+                GlobalAttrs,
+                Directives2String(dirs),spec);
+          if params<>'' then
+          begin
+            WriteLn(Output,'>');
+            Write(Output,params);
+            WriteLn(Output,prefix,Format('</%s>',[type_]));
+          end else WriteLn(Output,'/>');
+        .)
+.
+
+ObjFieldDecl<isClass: Boolean>
+(.var dirs: TDirectives;
+  vars: TStringList; I: Integer;
+  tattr,tbody,spec,sufix: String;
+.) =                                     (.vars := TStringList.Create; spec := ''; dirs :=[];.)
+  IdentList<vars> ':' Type<tattr,tbody>
+  (.if not IsProc then InPDir := True;.)
+  (
+     IF(.not IsProc.)
+     { PortabilityDirective<spec> }
+    ';'
+   |
+    ';'
+    [   Directive<dirs> {Directive<dirs>}
+        (.IsProc:=False;.)
+       ';'
+    ]  (.IsProc:=False;.)
+  )     (.if tbody='' then sufix := '/' else sufix := '';
+          if isClass then tattr := tattr+' class="true"';
+          for I :=0 to vars.Count-1 do
+          begin
+            WriteLn(Output,prefix,'<var name="',vars[I],'" ',
+                 tattr, GlobalAttrs,
+                 Directives2String(dirs),
+                 spec,sufix,'>');
+            if tbody<>'' then
+            begin
+              WriteLn(Output,tbody);   
+              WriteLn(Output,prefix,'</var>');
+            end; 
+          end;
+          vars.Free;.)
+.
+
+IMethodHeading
+(.var dirs: TDirectives;
+  spec,type_,ns,name,params: String;.) =
+  { DotNetAttr }                      (.dirs:=[];params:='';.)
+  (
+      "PROCEDURE" ident               (.type_:= 'procedure'; spec := Format(' name="%s"',[LexString]);.)
+      [GenericDecl<spec>]
+      [FormalParameters<params>]
+    | "FUNCTION" ident                (.type_:='function'; spec := Format(' name="%s"',[LexString]);.)
+      [GenericDecl<spec>]
+      [FormalParameters<params>] 
+      ':' TypeId<ns,name>             (.spec := spec+NameToAttr(ns,name,'return');.)
+  )
+  (.IsProc:=True;.)
+  {Directive<dirs>} 
+  (.InPDir:=True;.)
+  {
+    ';'
+     (    PortabilityDirective<spec>
+        | Directive<dirs>
+        | "DISPID" ConstExpr<name>    (.spec := spec+Format(' dispid="%s"',[name]);.)
+        | (.Break.)
+     )
+  }  (.IsProc:=False; InPDir:=False;
+       Write(Output,prefix,'<',type_,spec,Directives2String(dirs));
+       if params<>'' then
+       begin
+         WriteLn(Output,'>');
+         Write(Output,params);
+         WriteLn(Output,prefix,Format('</%s>',[type_]));
+       end else WriteLn(Output,'/>');
+     .)
+.
+
+ 
+Property<isClass: Boolean>
+(.var attr,body: String;.) =
+  "PROPERTY" ident           (.attr := Format(' name="%s"',[LexString]); body:='';
+                               if isClass then attr := attr+' class="true"';
+                             .)
+  [PropertyInterface<attr,body>] 
+                             (.InPropSpec:=True;.)
+  { PropertySpecifier<attr,body> } 
+  ';' [ "DEFAULT" ';'        (.attr:=attr+' default="true"'.)
+      ]
+     (.InPropSpec:=False;
+       Write(Output,prefix,'<property',attr, GlobalAttrs);
+       if body<>'' then
+       begin
+         WriteLn(Output,'>');
+         Write(Output,body);
+         WriteLn(Output,prefix,'</property>');
+       end else WriteLn(Output,'/>');
+     .)
+.
+
+PropertyInterface<var attr,body: String>
+(.var ns,name,params: String;.) =
+                          (.params:='';.)
+  [ 
+  '['
+    FormalParm<params> {';'FormalParm<params>}
+   ']'
+  ] ':' TypeId<ns,name>  
+   (.attr := attr+NameToAttr(ns,name,'type');
+     if params<>'' then
+     body := Concat(body,prefix,' <index>'#13#10,params,prefix,' </index>'#13#10);
+   .)
+.
+
+PropertySpecifier<var attr,body: String>
+(.var prop,ns,val: String; list: TStringList;.)=
+                      (.prop:='';val:='true'; list:=nil;.)
+ (
+     ( "INDEX"        (.prop:='index';  .)
+      |"DEFAULT"      (.prop:='default-value';.)
+      |"DISPID"       (.prop:='dispid'; .)
+      |"STORED"       (.prop:='stored'; .)
+     )
+     ConstExpr<val>
+   | ( "READ"         (.prop:='read'; .)
+      |"WRITE"        (.prop:='write'; .)
+     )
+     Qualident<ns,val>(.val:=FullIdent(ns,val);.)
+   | "IMPLEMENTS"
+      QualidentList<list>
+                      (.body := body+ImplementsList(list,0);.)
+   | "NODEFAULT"      (.prop:='nodefault';.)
+   | "READONLY"       (.prop:='readonly'; .)
+   | "WRITEONLY"      (.prop:='writeonly';.)
+ )                    (.if prop<>'' then attr:=Concat(attr,Format(' %s="%s"',[prop,val]));.)
+.
+
+
+ConstExpr<out body: String> 
+(.var pos: TSymbolRec;.)= 
+                 (.pos := NextSymbol^;.)
+ Expression      (.pos.Len := CurSymbol^.Beg+CurSymbol^.Len-pos.Beg;
+                   body := XMLEscape(Scanner.getSymbolText(@pos));
+                 .)
+.
+
+Expression =
+  SimpleExpression {RelOp SimpleExpression}
+.
+
+SimpleExpression =
+  ['+' | '-'] Term {AddOp Term}
+.
+
+Term = Factor {MulOp Factor}
+.
+
+Factor =
+   Number
+ | string
+ | "NIL"
+ | "NOT" Factor
+ | SetConstructor
+ | Designator
+ | '(' Expression ')'
+.
+
+SetConstructor =
+ '[' [SetElement {','SetElement}] ']'
+.
+
+SetElement =
+  Expression {'..' Expression}
+.
+
+Designator  
+(.var ns,name: String;.) =
+  ['@']
+  GQualident<ns,name>
+  {
+     '[' ExprList ']'
+   | '(' ExprList ')'
+   | '^'
+  }
+. 
+
+ExprList =
+  Expression {','Expression}
+.
+
+Qualident<out ns,name: String> =
+ ident        (.ns:=''; name := LexString;.)
+ {'.' ident   (.if ns='' then
+                  ns := name
+                else ns := Concat(ns,'.',name);
+                name := LexString;
+              .)
+ }
+.
+
+QualidentList<var list: TStringList>
+(.var ns,name: String;.) =
+ Qualident<ns,name>     (.if list=nil then list := TStringList.Create;
+                          list.Add(FullIdent(ns,name));
+                        .)
+ {','Qualident<ns,name> (.list.Add(FullIdent(ns,name));.) }
+.
+
+IdentList<var list: TStringList> =
+ ident     (.if list=nil then list := TStringList.Create;
+             list.Add(LexString);
+           .)
+ {','ident (.list.Add(LexString);.) }
+.
+
+RelOp =
+    '>'
+  | '<'
+  | '<='
+  | '>='
+  | '<>'
+.
+
+AddOp =
+    "+"
+  | "-"
+  | "OR"
+  | "XOR"
+.
+MulOp =
+    "*"
+  | "/"
+  | "DIV"
+  | "MOD"
+  | "AND"
+  | "SHL"
+  | "SHR"
+.
+
+Number =
+   number
+ | float
+ | hexnumber
+.
+
+ResourceString
+(.var val: String;.) =
+  ident '=' ConstExpr<val>
+  [ "DEPRECATED" [string] ]
+    (.WriteLn(Output,prefix,Format('<res-string value="%s"/>',[val]));.)
+  ';' 
+.
+
+Directive<var val: TDirectives> =
+
+  "CDECL"          (.Include(val,ddCdecl);     .)
+| "REGISTER"       (.Include(val,ddRegister);  .)
+| "PASCAL"         (.Include(val,ddPascal);    .)
+| "SAFECALL"       (.Include(val,ddSafecall);  .)
+| "STDCALL"        (.Include(val,ddStdcall);   .)
+| "DYNAMIC"        (.Include(val,ddDynamic);   .)
+| "VIRTUAL"        (.Include(val,ddVirtual);   .)
+| "EXPORT"         (.Include(val,ddExport);    .)
+| "EXTERNAL"       (.Include(val,ddExternal);  .)
+| "NEAR"           (.Include(val,ddNear);      .)
+| "FAR"            (.Include(val,ddFar);       .)
+| "FORWARD"        (.Include(val,ddForward);   .)
+| "OVERRIDE"       (.Include(val,ddOverride);  .)
+| "OVERLOAD"       (.Include(val,ddOverload);  .)
+| "REINTRODUCE"    (.Include(val,ddReintroduce);.)
+| "VARARGS"        (.Include(val,ddVarargs);   .)
+| "ABSTRACT"       (.Include(val,ddAbstract);  .)
+| "INLINE"         (.Include(val,ddInline);    .)
+| "ASSEMBLER"      (.Include(val,ddSssembler); .)
+| "STATIC"         (.Include(val,ddStatic);    .)
+| "FINAL"          (.Include(val,ddFinal);     .)
+.
+
+PortabilityDirective<var val: String> =
+  "DEPRECATED" [string] (.val := val+' deprecated="true"';.)
+  |"PLATFORM"           (.val := val+' platform="true"';  .)
+  |"LIBRARY"            (.val := val+' library="true"'; .)
+.
+
+DotNetAttr=
+ '[' {ANY}  ']'
+.
+
+GQualident<out ns,name: String>
+(.var g: String;.) =  (.g:='';.)
+ Qualident<ns,name>
+ [ Generics<g> ]      (.name:=name+g.)
+.  
+
+GQualidentList<var list: TStringList>
+(.var ns,name: String;.) =
+ GQualident<ns,name>     (.if list=nil then list := TStringList.Create;
+                           list.Add(FullIdent(ns,name));
+                         .)
+ {','GQualident<ns,name> (.list.Add(FullIdent(ns,name));.) }
+.
+
+Generics<out val: String>
+(.var pos: TSymbolRec; ns,n: String;.) =     
+                               (.pos := NextSymbol^;.)
+ "<"                           
+   (GQualident<ns,n>|"STRING") 
+   {','(GQualident<ns,n>|"STRING")}
+ ">"                           (.pos.Len := CurSymbol^.Beg+CurSymbol^.Len-pos.Beg;
+                                 val := XMLEscape(Scanner.getSymbolText(@pos));
+                               .)
+.
+
+
+GenericDecl<var spec: String>
+(.var pos: TSymbolRec;.) = 
+ "<"                   (.pos := NextSymbol^;.)
+    [GParm {';'GParm}]
+    
+ ">"                   (.pos.Len := CurSymbol^.Beg-pos.Beg;
+                         spec := spec+Format(' generic="%s"',[XMLEscape(Scanner.getSymbolText(@pos))]);
+                       .)
+.
+
+GParm
+(.var ns,n: String;.) =
+   NopIdentList
+   [
+     ':'
+     ("CLASS"|"CONSTRUCTOR"|GQualident<ns,n>)
+   ]
+ | "STRING"
+ 
+.
+
+NopIdentList =
+ ident {','ident }
+.
+
+
+END DelphiUnit.

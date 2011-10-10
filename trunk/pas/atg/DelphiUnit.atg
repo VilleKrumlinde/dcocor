@@ -1,0 +1,918 @@
+COMPILER DelphiUnit
+
+FRAME "delphi.frm"
+ header = (.
+{ Copyright (C) 2009, Serge Voloshenyuk
+  
+  This file is Free Software and part of DCocoR
+  
+  It is licensed under the following three licenses as alternatives:
+    1. GNU Lesser General Public License (LGPL) V2.1 or any newer version
+    2. GNU General Public License (GPL) V2 or any newer version
+    3. Apache License, V2.0 or any newer version
+  
+  You may not use this file except in compliance with at least one of
+  the above three licenses.
+  
+  See LICENSE.txt at the top of this package for the
+  complete terms and further detail along with the license texts for
+  the licenses in COPYING-LIB.txt, COPYING.txt and LICENSE-2.0.txt respectively.
+} 
+.)
+uses = (.SysUtils,StrUtils, DelphiCond.)
+
+ protected = (.
+   procedure IncludeFile(const Filename: String);
+ .)
+ public = (.
+   InPDir,IsProc,InPropSpec,InStruct,InStructHeader: Boolean;
+   PreProcessor: TDelphiCond;
+   Base: String;
+   function InSubRangeSet: Boolean;
+   procedure CheckHomograph(var sym: Integer); override;
+   procedure ProcessDelphiPragma(const str: String);
+   procedure Reinit; override;
+   procedure SetSourceFileName(const Filename: String); override;
+.)
+
+precreate = (.
+  PreProcessor := TDelphiCond.Create(Self);
+  with PreProcessor do
+  begin
+   Defines := PreProcessor.Defines +'UNICODE';
+   Version := 200;
+  end;
+.)
+
+ implementation = (.
+ 
+procedure TDelphiUnit.CheckHomograph(var sym: Integer);
+begin
+  if ((sym=ABSTRACTSym)and not (IsProc or InStructHeader)) or
+     ((sym=DISPIDSym)and not(IsProc or InPropSpec)) or
+     ((sym in [deprSym..absSym])and not InPDir) or
+     ((sym in [CDECLSym..FINALSym])and not IsProc) or
+     ((sym in [HELPERSym,SEALEDSym])and not InStructHeader) or
+     ((sym in [STRICTSym..PUBLISHEDSym])and not InStruct) or
+     ((sym in [INDEXSym..WRITEONLYSym])and not InPropSpec)
+  then sym := identSym;
+end; 
+ 
+procedure TDelphiUnit.SetSourceFileName(const Filename: String);
+begin
+  inherited;
+  Base := ExtractFilePath(Filename);
+end;
+
+procedure TDelphiUnit.IncludeFile(const Filename: String);
+var fn: String;
+    BMark, OldSrc: String;
+    WC,EC : Integer;
+begin
+  fn := ExpandFileName(Base+Filename);
+  if FileExists(fn) then
+  begin
+    WC := WarnCount; EC := ErrorCount;
+    BMark := Bookmark;
+    OldSrc := Scanner.Source;
+    try
+      SetSourceFileName(fn);
+      _InterfaceBody;
+    finally
+      Scanner.SetSource(OldSrc);
+      GotoBookmark(BMark);
+      WarnCount := WC; ErrorCount := EC;
+    end;
+  end;
+end;
+ 
+procedure TDelphiUnit.Reinit;
+begin
+  inherited;
+  with PreProcessor do
+  begin
+    Version := 200;
+  end;  
+  InPDir := False; IsProc := False; InStruct := False; InStructHeader := False;
+end;
+ 
+function TDelphiUnit.InSubRangeSet: Boolean;
+begin 
+   
+  Result := ((CurrentInputSymbol=identSym)and(MatchStr(LexNames[1],['HIGH','LOW','SIZEOF'])))
+        or
+           ((Symbols[2]^.Id) in [_point_pointSym,_plusSym,_minusSym,
+                    _greater_equalSym,_less_greaterSym,ORSym,XORSym,_starSym,
+                    _slashSym,DIVSym,MODSym,ANDSym,SHLSym,SHRSym]);
+end;  
+ 
+procedure TDelphiUnit.ProcessDelphiPragma(const str: String);
+
+  function DelphiCond(var aName: String): Integer;
+  begin
+    Result := 0;
+    if Pos('{$IFDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 1;
+    end else if Pos('{$IFNDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 2;
+    end else if Pos('{$IFEND',aName)=1 then
+      Result := 6
+    else if Pos('{$IFOPT',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 9;
+    end else if Pos('{$IF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,5,Length(aName)-5));
+      Result := 7;
+    end else if Pos('{$INCLUDE',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,10,Length(aName)-10));
+      Result := 10;
+    end else if Pos('{$I',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,4,Length(aName)-4));
+      Result := 10;
+    end else if Pos('{$DEFINE',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 3;
+    end else if Pos('{$UNDEF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,8,Length(aName)-8));
+      Result := 4;
+    end else if Pos('{$ELSEIF',aName)=1 then
+    begin
+      aName := Trim(Copy(aName,9,Length(aName)-9));
+      Result := 8;
+    end else if Pos('{$ELSE',aName)=1 then
+      Result := 5
+    else if Pos('{$ENDIF',aName)=1 then
+      Result := 6;
+  end;
+
+  procedure Skip;
+  var rec: TSymbolRec;
+      id: String;
+      c: Integer;
+  begin
+    c := 1;
+    while True do
+    begin
+      repeat
+        Scanner.Get(rec);
+      until rec.Id in [_EOFSYMB,DelphiPragmaSym];
+      if rec.Id =_EOFSYMB then
+        Exit;
+
+      id := Scanner.getSymbolText(@rec);
+      case DelphiCond(id) of
+        1,2:  Inc(C);
+        5:  if c=1 then Break;
+        6:  begin
+             Dec(c);
+             if c=0 then Break;
+            end;
+        8: if (c=1)and PreProcessor.Evaluate(id) then
+              Break;
+      end;
+    end;
+  end;
+
+var id: String;
+begin
+  id := str;
+  with PreProcessor do
+  case DelphiCond(id) of
+    1: if not Defined[id] then Skip;
+    2: if Defined[id] then Skip;
+    3: Defined[id] := True;
+    4: Defined[id] := False;
+    5: Skip;
+    7,8: if not Evaluate(id) then Skip;
+    10: IncludeFile(id);
+  end;
+end;
+.)
+ 
+END
+
+
+IGNORECASE
+
+CHARACTERS
+letter="ABCDEFGHIJKLMNOPQRSTUVWXYZ_".
+digit="0123456789".
+hexdigit = digit + "ABCDEF".
+special = "+-*/=<>[].,():;^@{}$#".
+ctrl=CHR(1)..CHR(31).
+tab=CHR(9).
+eol=CHR(13).
+lf=CHR(10).
+norbrace = ANY-'}'.
+noquote=ANY-"'" -ctrl.
+
+TOKENS
+ident = letter{letter|digit}.
+number = digit{digit} | digit { digit } CONTEXT ( ".." ).
+string = ("'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit}))
+         {"'" {noquote}"'"| "#"(digit{digit}|"$"hexdigit{hexdigit})}.
+float = digit{digit}
+        (  "." {digit}
+           [ "E"
+            ["+" |"-"]
+            digit{digit}
+           ]
+          |"E"["+"|"-"]digit{digit}
+        ).
+hexnumber = "$" hexdigit {hexdigit}.
+_scl = ";".
+str = "STRING".
+cntr = "CONSTRUCTOR".
+destr = "DESTRUCTOR".
+intf = "INTERFACE".
+dintf = "DISPINTERFACE".
+ress = "RESOURCESTRING".
+proc = "PROCEDURE".
+impl = "IMPLEMENTATION".
+depr = HOMOGRAPH "DEPRECATED".
+plfm = HOMOGRAPH "PLATFORM".
+lib = HOMOGRAPH "LIBRARY".
+abs = HOMOGRAPH "ABSOLUTE".
+
+HOMOGRAPHS
+    
+ "STRICT" "PRIVATE" "PROTECTED" "PUBLIC" "PUBLISHED"
+
+ "CDECL" "REGISTER" "DYNAMIC" "VIRTUAL" "EXPORT" "EXTERNAL" "NEAR" "FAR"
+ "FORWARD" "OVERRIDE" "OVERLOAD" "PASCAL" "REINTRODUCE" "SAFECALL"
+ "STDCALL" "VARARGS" "INLINE" "ASSEMBLER" "STATIC" "MESSAGE" "FINAL" 
+ 
+ "ABSTRACT" "HELPER" "SEALED"
+ 
+ "INDEX" "DEFAULT" "READ" "WRITE" "STORED" "IMPLEMENTS"
+ "NODEFAULT" "READONLY" "WRITEONLY"
+ 
+ "DISPID"
+
+
+IGNORE tab+lf+eol
+PRAGMAS
+ DelphiPragma = "{$" {norbrace} '}'.  (. ProcessDelphiPragma(LexNames[1]); .)
+
+
+COMMENTS FROM '{' TO '}'
+COMMENTS FROM "(*" TO "*)"
+COMMENTS FROM "//" TO eol
+
+PRODUCTIONS
+
+DelphiUnit =
+  "UNIT"
+  Qualident
+  (.InPDir:=True;.)
+  { PortabilityDirective }
+  (.InPDir:=False;.)
+  ";"
+
+  "INTERFACE"
+  InterfaceBody
+  "IMPLEMENTATION"
+    (. Exit; .)
+.
+
+PortabilityDirective =
+  "DEPRECATED" [string]
+  |"PLATFORM"|"LIBRARY"
+.
+
+InterfaceBody =
+  [ "USES"
+    UsesClause ';'
+  ]
+  {SYNC InterfaceDecl}
+.
+
+UsesClause =
+  QualidentList
+.
+
+InterfaceDecl =
+    (   "CONST"
+        ConstantDecl {ConstantDecl}
+      | "VAR"
+        VarDecl {VarDecl}
+    )
+  | "TYPE"  TypeDecl {TypeDecl}
+  | ExportedHeading
+  | (.InPDir:=True;.)
+    "resourcestring" 
+    ResourceString {ResourceString}(.InPDir:=False;.)
+.
+
+TypeId =
+   GQualident
+ | "STRING"
+.
+
+ConstantDecl =
+  ident
+  (
+      ':' Type '='
+      ConstExprOrStructConst
+    | '=' ConstExpr
+  )
+  (.InPDir:=True;.)
+  { PortabilityDirective }
+  (.InPDir:=False;.)
+ ';'
+.
+{W-}
+ConstExprOrStructConst =
+   '(' 
+     (
+         IF(. Symbols[2]^.id=_colonSym .)
+         ident ':' ConstExprOrStructConst 
+         { ';' 
+           (  ident ':' ConstExprOrStructConst
+            | (.Break;.)
+           )
+         }
+       | ConstExprOrStructConst
+         {',' ConstExprOrStructConst}
+     )
+   ')'
+ | ConstExpr
+.  {W+}
+
+
+TypeDecl =
+   { DotNetAttr }
+   ident 
+   [ GenericDecl ]
+   "="
+   ( 
+      IF(.Symbols[2]^.Id<>OFSym.)
+      ClassType
+    | ObjectType
+    | InterfaceType
+    | ["TYPE"] Type
+   )  
+   (.if not IsProc then InPDir:=True;.)
+   (
+      IF(.not IsProc.)
+      { PortabilityDirective }
+      (.InPDir:=False;.)
+      ';'
+    | ';'
+      [ Directive {Directive}';']
+      (.IsProc:=False;.)
+   )
+.
+
+VarDecl =
+  IdentList 
+  ":"
+  Type
+  (.if not IsProc then InPDir:=True;.)
+  (
+     IF(.not IsProc.)
+     (
+          "ABSOLUTE" ident
+        | { PortabilityDirective }
+          (.InPDir:=False;.)
+          [  
+            "=" ConstExprOrStructConst
+          ] 
+     )
+    ';'
+   |
+    (  
+       "=" ConstExpr ';'
+     | 
+       ';'
+       [  Directive {Directive}
+          
+          ["=" ConstExpr]
+          ';'
+       ]
+    )
+  ) (.IsProc:=False;.)   
+.
+
+{W-}
+Type =
+     "STRING"
+     [ "[" ConstExpr "]" ]       
+  |  EnumeratedType 
+  | {W-}IF(.LexNames[1]='REFERENCE'.){W+} ident "TO"
+     ProcedureType
+  |  IF(. not InSubRangeSet.)
+     GQualident
+     [ {W-}IF(.LexName='ANSISTRING'.){W+} "(" (number | hexnumber) ")"]
+  |  SubrangeType
+  |  PointerType
+  |  StrucType
+  |  ClassRefType
+  |  ProcedureType
+.  {W+}
+ 
+
+EnumeratedType =
+ '(' EnumeratedTypeElement
+     {',' EnumeratedTypeElement
+     }
+ ')'
+.
+EnumeratedTypeElement =
+  ident [ '=' ConstExpr ]
+.
+
+PointerType =
+  "^" TypeId
+.
+
+SubrangeType = ConstExpr ".." ConstExpr.
+
+StrucType = ["PACKED"] (ArrayType | SetType | FileType | RecType).
+
+SetType = "SET" "OF"
+( 
+  IF(. InSubRangeSet.)
+   SubrangeType
+ | EnumeratedType
+ | Qualident
+) 
+.
+
+FileType = "FILE" "OF" Type
+.
+
+
+ArrayType =
+  "ARRAY"
+  [ '[' ArrayIndexType
+        {','ArrayIndexType}
+    ']'
+  ]
+  "OF" Type
+  [ IF(.IsProc and (Abs(Symbols[2]^.id) in [CDECLSym..ASSEMBLERSym]).)
+    ';' Directive {Directive}
+    
+  ] (.IsProc:=False;.)
+.
+
+ArrayIndexType = {W-}
+     EnumeratedType
+  | IF(. not InSubRangeSet.)
+    Qualident
+  | SubrangeType
+. {W+}
+
+
+ClassRefType = "CLASS" "OF" Qualident
+.
+
+{W-}
+RecType = 
+   (.InStruct:=True; InStructHeader := True;.)
+   "RECORD" 
+   [   "HELPER" "FOR" GQualident
+   ] (.InStructHeader := False;.)
+   [RecBody]
+.
+
+RecBody
+ =  
+  { 
+    ["STRICT"]( "PRIVATE"|"PROTECTED"|"PUBLIC"|"PUBLISHED" )
+   | 
+    (.InStruct:=False;.)
+    (   "CONST"
+        ConstantDecl    (.InStruct:=True;.) {(.InStruct:=False;.)ConstantDecl(.InStruct:=True;.)} 
+      | "TYPE" TypeDecl (.InStruct:=True;.) {(.InStruct:=False;.)TypeDecl(.InStruct:=True;.)}    
+      | ["CLASS"]
+        (
+            ["VAR"] FieldDecl
+            ( ';'| (.Break.) )
+          | MethodHeading
+          | Property
+        )
+      | "CASE" VariantSection
+        [';'](.Break.)
+    ) (.InStruct:=True;.)
+  }
+  (.InStruct:=False;.) 
+  "END"
+.
+
+
+VariantSection =
+  Qualident [':' Qualident] "OF" 
+  RecVariant 
+  {
+    ';'
+    (   RecVariant
+      | (.Break;.) 
+    )
+  }
+.
+
+FieldList =
+  {
+      FieldDecl
+      ( ';'| (.Break.) )
+    | "CASE" VariantSection
+      [';'](.Break.)
+  }
+. 
+
+RecVariant =
+  ConstExpr {','ConstExpr}
+  ':' '(' FieldList ')'
+.
+{W-}
+
+FieldDecl =
+  IdentList ':' Type
+  (.if not IsProc then InPDir:=True;.)
+  (
+      IF(.not IsProc.)
+      { PortabilityDirective }
+      (.InPDir:=False;.)
+    | 
+      [ IF(.Abs(Symbols[2]^.id) in [CDECLSym..ASSEMBLERSym].)
+        ';'Directive {Directive}
+        
+      ]
+      (.IsProc:=False;.)
+  )
+.
+
+ClassType =
+   (.InStruct:=True; InStructHeader := True;.)
+   "CLASS"
+   [   "HELPER" "FOR" GQualident
+     | "ABSTRACT"
+     | "SEALED"
+   ] (.InStructHeader := False;.)
+   [ '(' GQualidentList ')'  ]
+   [ClassBody]
+.
+
+ObjectType =
+  (.InStruct:= True;.)
+  "OBJECT" 
+  [ '(' QualidentList ')'  ]
+  [ClassBody]
+.{W+}
+
+
+InterfaceType =
+   (  "INTERFACE"
+    | "DISPINTERFACE"
+   )
+   [
+     [ "(" GQualidentList ")"  ]
+     [ "["  (string|ident)  "]"  ]
+     {   IMethodHeading
+       | Property
+     }
+     "END"
+   ]
+.
+
+ClassBody
+ =  {W-}
+  { 
+     ["STRICT"]
+     ( "PRIVATE"|"PROTECTED"|"PUBLIC"|"PUBLISHED" )
+    | 
+     (.InStruct:=False;.)
+     ( "CONST"
+          ConstantDecl   (.InStruct:=True;.) { (.InStruct:=False;.)ConstantDecl(.InStruct:=True;.)} 
+      | "TYPE"  TypeDecl (.InStruct:=True;.) {(.InStruct:=False;.)TypeDecl(.InStruct:=True;.)}    
+      | ["CLASS"]
+        (
+            ["VAR"] ObjFieldDecl
+          | MethodHeading
+          | Property
+        )
+     ) (.InStruct:=True;.)
+  }
+  (.InStruct:=False;.) {W+}
+  "END"
+.
+
+
+ProcedureType =
+ (  "PROCEDURE" [FormalParameters]
+  | "FUNCTION"  [FormalParameters] 
+    ':' TypeId
+ ) ["OF" "OBJECT"] 
+ (.IsProc:=True;.)
+ {Directive}
+.       
+
+ExportedHeading =
+  (   "PROCEDURE" ident [FormalParameters]
+    | "FUNCTION"  ident [FormalParameters] ':' TypeId
+  ) 
+  (.IsProc:=True;.)
+  {Directive}
+  (.InPDir:=True;.) {W-}
+  {
+    ';'
+     (   
+          PortabilityDirective
+        | Directive
+        | (.Break.)
+     )
+     {   
+          PortabilityDirective 
+        | Directive
+     }
+  } (.IsProc:=False; InPDir:=False;.) {W+}
+.
+ 
+FormalParameters =
+  '('                             
+    [FormalParm {';'FormalParm}]
+  ')'
+.
+
+FormalParm =
+  ["VAR" | "CONST" | "OUT" | "IN"] 
+  IdentList
+  [
+    ':'
+    (
+       "ARRAY" "OF" ("CONST"|TypeId)
+     | TypeId ['=' ConstExpr]
+    )
+    
+  ]
+.
+
+MethodHeading = 
+ { DotNetAttr }
+(
+   "PROCEDURE" 
+   (
+     ident [ GenericDecl ]
+     (
+        [FormalParameters]
+      | '.'Qualident '=' ident
+     
+     )
+   )
+ | ( 
+       {W-}IF(.LexNames[1]='OPERATOR'.){W+} ident
+     | "FUNCTION"  
+   )
+   ( 
+     ident [ GenericDecl ]
+     (
+        [FormalParameters] ':' TypeId
+      | '.'Qualident '=' ident
+     
+     )
+   )
+ | "CONSTRUCTOR" ident [FormalParameters]
+ | "DESTRUCTOR"  ident [FormalParameters]
+) (.IsProc:=True;.) 
+  {Directive} {W-}
+  (.InPDir := True;.)
+  {
+    ';' 
+     (    PortabilityDirective          
+        | Directive
+        | "MESSAGE" ConstExpr
+        | (.Break.)
+     )
+  } (.IsProc:=False; InPDir := False;.){W+}
+.
+
+ObjFieldDecl =
+  IdentList ':' Type
+  (.if not IsProc then InPDir := True;.)
+  (
+     IF(.not IsProc.) 
+     { PortabilityDirective }
+    ';'
+   |
+    ';'
+    [   Directive {Directive}
+        (.IsProc:=False;.)
+       ';'
+    ]  (.IsProc:=False;.)  
+  )  
+.
+
+
+IMethodHeading = 
+  { DotNetAttr }
+  (
+     "PROCEDURE" ident[ GenericDecl ] [FormalParameters]
+    | "FUNCTION" ident[ GenericDecl ] [FormalParameters] ':' TypeId
+   
+  )  
+  (.IsProc:=True;.)
+  {Directive} {W-}
+  (.InPDir:=True;.)
+  {
+    ';'  
+     (    PortabilityDirective
+        | Directive
+        | "DISPID" ConstExpr
+        | (.Break.)
+     )
+  } (.IsProc:=False; InPDir:=False;.){W+}
+.
+
+ 
+Property =
+  "PROPERTY" ident 
+  [PropertyInterface] 
+  (.InPropSpec:=True;.)
+  { PropertySpecifier } 
+  ';' [ "DEFAULT" ';']
+  (.InPropSpec:=False;.)
+.
+
+PropertyInterface =
+  [ 
+  '['                                          
+    FormalParm {';'FormalParm}
+   ']'
+  ] ':' TypeId
+.
+
+PropertySpecifier
+=
+     ("INDEX"|"DEFAULT"|"DISPID")
+      ConstExpr
+   | ("READ"|"WRITE")
+      Qualident
+   | "STORED"
+      Expression
+   | "IMPLEMENTS"
+      QualidentList
+   |  "NODEFAULT"|"READONLY"|"WRITEONLY"
+.
+
+
+ConstExpr = Expression.
+
+Expression =
+  SimpleExpression {RelOp SimpleExpression}
+.
+
+SimpleExpression =
+  ['+' | '-'] Term {AddOp Term}
+.
+
+Term = Factor {MulOp Factor}
+.
+
+Factor =
+   Number
+ | string
+ | "NIL"
+ | "NOT" Factor
+ | SetConstructor
+ | Designator
+ | '(' Expression ')'
+.
+
+SetConstructor =
+ '[' [SetElement {','SetElement}] ']'
+.
+
+SetElement =
+  Expression {'..' Expression}
+.
+
+Designator =
+  ['@']
+  GQualident
+  {
+     '[' ExprList ']'
+   | '(' ExprList ')'
+   | '^'
+  }
+.
+
+ExprList =
+  Expression {','Expression}
+.
+
+
+Qualident =
+ ident {'.' ident}
+.
+{W-}
+GQualident =
+ Qualident 
+ [ "<"
+    (GQualident|"STRING") {','(GQualident|"STRING")}
+   ">" 
+ ]
+.  
+{W+}
+
+QualidentList =
+ Qualident {','Qualident}
+.
+
+GQualidentList =
+ GQualident {','GQualident}
+.
+
+
+IdentList = ident {','ident}
+.
+
+RelOp =
+    '>'
+  | '<'
+  | '<='
+  | '>='
+  | '<>'
+.
+
+AddOp =
+    "+"
+  | "-"
+  | "OR"
+  | "XOR"
+.
+MulOp =
+    "*"
+  | "/"
+  | "DIV"
+  | "MOD"
+  | "AND"
+  | "SHL"
+  | "SHR"
+.
+
+Number =
+   number
+ | float
+ | hexnumber
+.
+
+ResourceString = 
+  ident '=' Expression
+  [ "DEPRECATED" [string] ]
+  ';'
+.
+
+Directive =
+  "CDECL"
+| "REGISTER"
+| "DYNAMIC"
+| "VIRTUAL"
+| "EXPORT"
+| "EXTERNAL"
+| "NEAR"
+| "FAR"
+| "FORWARD"
+| "OVERRIDE"
+| "OVERLOAD"
+| "PASCAL"
+| "REINTRODUCE"
+| "SAFECALL"
+| "STDCALL"
+| "VARARGS"
+| "ABSTRACT"
+| "INLINE"
+| "ASSEMBLER"
+| "STATIC"
+| "FINAL"
+.
+
+GenericDecl =
+ "<"
+    [GParm {';'GParm}]
+ ">"
+.
+
+GParm =
+   IdentList
+   [
+     ':'
+     ("CLASS"|"CONSTRUCTOR"|Qualident)
+   ]
+.
+
+DotNetAttr=
+ '[' {ANY}  ']'
+.   
+
+END DelphiUnit.
