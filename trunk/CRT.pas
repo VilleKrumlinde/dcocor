@@ -18,7 +18,7 @@
 unit CRT;
 
 interface
-uses Classes, Contnrs, SysUtils, Sets, CharSets, CRTypes, CocoAncestor;
+uses Classes, Contnrs, SysUtils, CocoSets, CharSets, CRTypes, CocoAncestor;
 
 type
 
@@ -34,13 +34,13 @@ type
     fDummyNode: TNode;
 
     fDummyName: Integer;
-    fAllSyncSets: TSet;
+    fAllSyncSets: TCocoSet;
     fNoSym: TtSymbol;
 
     fDeletableCount,
     fNondefinedTerminals, fUnreachableNonterminals,
     fCircularProductions,fNonderivedNonterminals: Integer;
-    fReachables: TSet;
+    fReachables: TCocoSet;
 
     fFrameName: String;
     fIgnoreCase: Boolean;
@@ -98,9 +98,9 @@ type
     function FixStringForToken(const name: string): String;
     function CountHomographs: Integer;
 
-    procedure CompExpected(gn: TNode; curNT: TNtSymbol; s: TSet);
-    procedure CompFirstSet(gn: TNode; rset: TSet);
-    procedure CompFirstSets;
+    procedure CompExpected(gn: TNode; curNT: TNtSymbol; s: TCocoSet);
+    procedure CompFirsTCocoSet(gn: TNode; rset: TCocoSet);
+    procedure CompFirsTCocoSets;
     procedure CompFollowSets;
     procedure CompAnySets;
     procedure CompSyncSets;
@@ -124,7 +124,7 @@ type
     property eofSy: TtSymbol read fEofSy;
     property gramSy: TNtSymbol read fGramSy write fGramSy;
     property noSym: TtSymbol read fNoSym;
-    property AllSyncSets: TSet read fAllSyncSets;
+    property AllSyncSets: TCocoSet read fAllSyncSets;
     property Literals[const Name: String]: TSymbol read getLiteral write setLiteral;
 
     property Nodes[I: Integer]: TNode read getNode;
@@ -187,8 +187,8 @@ begin
   fTerminals := TList.Create;
   fNonterminals := TList.Create;
   fPagmas := TList.Create;
-  fAllSyncSets := TSet.Create;
-  fReachables := TSet.Create;
+  fAllSyncSets := TCocoSet.Create;
+  fReachables := TCocoSet.Create;
   Init;
 end;
 
@@ -284,7 +284,7 @@ begin
   if Parser.Successful then
   begin
     CompDeletableSymbols;
-    CompFirstSets;
+    CompFirsTCocoSets;
     CompFollowSets;
     CompAnySets;
     CompSyncSets;
@@ -609,10 +609,10 @@ begin
   end;
 end;
 
-procedure TSymbolTable.CompFirstSet(gn: TNode; rset: TSet);
-var visited: TSet;
+procedure TSymbolTable.CompFirsTCocoSet(gn: TNode; rset: TCocoSet);
+var visited: TCocoSet;
 
-  procedure CompFirst(gn: TNode; rset: TSet);
+  procedure CompFirst(gn: TNode; rset: TCocoSet);
   begin
     while (gn <> nil) and not visited[gn.index] do
     begin
@@ -641,7 +641,7 @@ var visited: TSet;
   end;
 
 begin
-  visited := TSet.Create(fNodes.Count);
+  visited := TCocoSet.Create(fNodes.Count);
   try
     rset.Clear;
     CompFirst(gn,rset);
@@ -650,9 +650,9 @@ begin
   end;
 end;
 
-procedure TSymbolTable.CompFirstSets;
+procedure TSymbolTable.CompFirsTCocoSets;
 var I: Integer;
-    fs: TSet;
+    fs: TCocoSet;
 begin
    for I := 0 to fNonterminals.Count - 1 do
    with TNtSymbol(fNonterminals[I]) do
@@ -660,10 +660,10 @@ begin
 
    for I := 0 to fNonterminals.Count - 1 do
    begin
-     fs := TSet.Create(fTerminals.Count);
+     fs := TCocoSet.Create(fTerminals.Count);
      with TNtSymbol(fNonterminals[I]) do
      begin
-       CompFirstSet(graph,fs);
+       CompFirsTCocoSet(graph,fs);
        first := fs;
      end;
    end;
@@ -671,20 +671,20 @@ end;
 
 procedure TSymbolTable.CompFollowSets;
 var I: Integer;
-  visited: TSet;
+  visited: TCocoSet;
   curSy: TNtSymbol;
 
   procedure CompFollow(gn: TNode);
-  var s : TSet;
+  var s : TCocoSet;
   begin
-   s := TSet.Create;
+   s := TCocoSet.Create;
    try
     while (gn<>nil) and not visited[gn.index] do
     begin
       visited[gn.index] := True;
       if gn.typ = ntNonTerminal then
       begin
-        CompFirstSet(gn.next,s);
+        CompFirsTCocoSet(gn.next,s);
         with gn.sym as TNtSymbol do
         begin
           follow.Unite(s);
@@ -724,15 +724,15 @@ var I: Integer;
   end;
 
 begin
-  visited := TSet.Create(fNodes.Count);
+  visited := TCocoSet.Create(fNodes.Count);
   try
     for I := 0 to fNonterminals.Count - 1 do
     with TNtSymbol(fNonterminals[I]) do
     begin
       follow.Free;
-      follow := TSet.Create(fTerminals.Count);
+      follow := TCocoSet.Create(fTerminals.Count);
       nts.Free;
-      nts := TSet.Create(fNonterminals.Count);
+      nts := TCocoSet.Create(fNonterminals.Count);
     end;
     gramSy.follow[eofSy.index] := True;
 
@@ -754,10 +754,10 @@ begin
   end;
 end;
 
-procedure TSymbolTable.CompExpected(gn: TNode; curNT: TNtSymbol; s: TSet);
+procedure TSymbolTable.CompExpected(gn: TNode; curNT: TNtSymbol; s: TCocoSet);
 begin
   s.Clear;
-  CompFirstSet(gn,s);
+  CompFirsTCocoSet(gn,s);
   if gn.IsDeletableGraph then
     s.Unite(curNT.follow);
 end;
@@ -785,10 +785,10 @@ var curSy: TNtSymbol;
 
   procedure FindAS(gn: TNode);
   var a,q: TNode;
-    s1,s2: TSet;
+    s1,s2: TCocoSet;
   begin
-   s1 := TSet.Create(fTerminals.Count);
-   s2 := TSet.Create(fTerminals.Count);
+   s1 := TCocoSet.Create(fTerminals.Count);
+   s2 := TCocoSet.Create(fTerminals.Count);
    try
     while gn<>nil do
     begin
@@ -815,7 +815,7 @@ var curSy: TNtSymbol;
             a.aset.Subtract(s2);
           end
           else begin
-            CompFirstSet(q.sub, s2);
+            CompFirsTCocoSet(q.sub, s2);
             s1.Unite(s2);
           end;
           q := q.down;
@@ -839,13 +839,13 @@ begin
 end;
 
 procedure TSymbolTable.CompSyncSets;
-var visited: TSet;
+var visited: TCocoSet;
   curSy: TNtSymbol;
 
  procedure CompSync(gn: TNode);
- var s: TSet;
+ var s: TCocoSet;
  begin
-   s := TSet.Create(fTerminals.Count);
+   s := TCocoSet.Create(fTerminals.Count);
    try
     while (gn<>nil) and not visited[gn.index] do
     begin
@@ -876,7 +876,7 @@ begin
   fAllSyncSets.Size := fTerminals.Count;
   fAllSyncSets.Clear;
   fAllSyncSets[eofSy.index] := True;
-  visited := TSet.Create(fNodes.Count);
+  visited := TCocoSet.Create(fNodes.Count);
   try
     for I := 0 to fNonterminals.Count - 1 do
     begin
@@ -890,9 +890,9 @@ end;
 
 procedure TSymbolTable.SetupAnys;
 var I: Integer;
-  s: TSet;
+  s: TCocoSet;
 begin
-  s := TSet.Create(fTerminals.Count);
+  s := TCocoSet.Create(fTerminals.Count);
   s.Fill;
   s[Self.eofSy.index] := False;
   try
@@ -1070,7 +1070,7 @@ begin
 end;
 
 function TSymbolTable.CountNonderivedNonterminals: Integer;
-var I: Integer; changed: Boolean;  mark: TSet;
+var I: Integer; changed: Boolean;  mark: TCocoSet;
 
   function IsTerm(p: TNode): Boolean;
   begin
@@ -1087,7 +1087,7 @@ var I: Integer; changed: Boolean;  mark: TSet;
     Result := True;
   end;
 begin
-  mark := TSet.Create(NonTerminalCount);
+  mark := TCocoSet.Create(NonTerminalCount);
   try
     repeat
       changed := False;
@@ -1123,11 +1123,11 @@ var curSy: TNtSymbol;
   end;
 
   procedure CheckRes(p: TNode; rslvAllowed: Boolean);
-  var fs1,fs2, fs3: TSet; q: TNode;
+  var fs1,fs2, fs3: TCocoSet; q: TNode;
   begin
-   fs1 := TSet.Create(fTerminals.Count);
-   fs2 := TSet.Create(fTerminals.Count);
-   fs3 := TSet.Create(fTerminals.Count);
+   fs1 := TCocoSet.Create(fTerminals.Count);
+   fs2 := TCocoSet.Create(fTerminals.Count);
+   fs3 := TCocoSet.Create(fTerminals.Count);
    try
     while p<>nil do
     begin
@@ -1167,7 +1167,7 @@ var curSy: TNtSymbol;
         if p.sub.typ=ntIf then
         begin
           fs1.Clear; fs2.Clear;
-          CompFirstSet(p.sub.next,fs1);
+          CompFirsTCocoSet(p.sub.next,fs1);
           CompExpected(p.next, curSy, fs2);
           if not fs1.Intersects(fs2) then
             ResErr(p.sub,'Misplaced resolver: no LL(1) conflict');
@@ -1198,7 +1198,7 @@ procedure TSymbolTable.CheckLL1;
 var curSy: TNtSymbol; I: Integer;
 
   procedure CheckAlts(p: TNode);
-  var s1,s2: TSet;
+  var s1,s2: TCocoSet;
     q: TNode;
 
     procedure LL1Error(cond: Integer; sym: TSymbol);
@@ -1223,8 +1223,8 @@ var curSy: TNtSymbol; I: Integer;
     end;
 
   begin
-   s1 := TSet.Create(TerminalCount);
-   s2 := TSet.Create(TerminalCount);
+   s1 := TCocoSet.Create(TerminalCount);
+   s2 := TCocoSet.Create(TerminalCount);
    try
     while p<>nil do
     begin

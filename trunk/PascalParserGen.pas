@@ -18,13 +18,13 @@
 unit PascalParserGen;
 
 interface
-uses SysUtils, Classes, CRTypes, ParserGen, CharSets, Sets, CRT, CRA;
+uses SysUtils, Classes, CRTypes, ParserGen, CharSets, CocoSets, CRT, CRA;
 
 type
   TPacalParserGenerator = class(TParserGenerator)
   protected
-    procedure PrintProductionCode(const lineprefix: String; curSy: TNtSymbol; gn: TNode; checked: TSet);
-    function GenCond(s: Tset; p: TNode): String;
+    procedure PrintProductionCode(const lineprefix: String; curSy: TNtSymbol; gn: TNode; checked: TCocoSet);
+    function GenCond(s: TCocoSet; p: TNode): String;
     function GenCharSelector(s: TCharSet): String;
   public
     procedure PrintState(state: TState); override;
@@ -87,7 +87,7 @@ end;
 
 { TPacalParserGenerator }
 
-function TPacalParserGenerator.GenCond(s: Tset; p: TNode): String;
+function TPacalParserGenerator.GenCond(s: TCocoSet; p: TNode): String;
 var I: Integer; str: String;
 begin
   if s.IsOne(I) then
@@ -196,7 +196,7 @@ end;
 
 procedure TPacalParserGenerator.PrintParserImplementation;
 var I: Integer;
-  checked: TSet;
+  checked: TCocoSet;
 begin
   for I := 0 to Coco.tab.NonTerminalCount - 1 do
   with Coco.tab,NonTerminals[I] do
@@ -205,7 +205,7 @@ begin
     if hasSemPos then
       PrintFragment(semPos,True);
     WriteLn(Coco.Output,'begin');
-    checked := TSet.Create(TerminalCount);
+    checked := TCocoSet.Create(TerminalCount);
     try
       PrintProductionCode('  ',NonTerminals[I],graph,checked);
     finally
@@ -271,11 +271,11 @@ begin
 end;
 
 procedure TPacalParserGenerator.PrintProductionCode(const lineprefix: String;
-   curSy: TNtSymbol; gn: TNode; checked: TSet);
-var s1,s2: TSet; p: TNode; str: String; eq: Boolean;
+   curSy: TNtSymbol; gn: TNode; checked: TCocoSet);
+var s1,s2: TCocoSet; p: TNode; str: String; eq: Boolean;
 begin
- s1 := TSet.Create(Coco.tab.TerminalCount);
- s2 := TSet.Create(Coco.tab.TerminalCount);
+ s1 := TCocoSet.Create(Coco.tab.TerminalCount);
+ s2 := TCocoSet.Create(Coco.tab.TerminalCount);
  try
   while gn<>nil do
   begin
@@ -301,7 +301,7 @@ begin
           end;
       ntAlt:
           begin
-            Coco.tab.CompFirstSet(gn,s1);
+            Coco.tab.CompFirsTCocoSet(gn,s1);
             eq := s1.Equals(checked);
             p := gn;
             str := '';
@@ -333,7 +333,7 @@ begin
               s1.Clear;
               if p.up then p :=nil else p := p.next;
             end  else begin
-              Coco.tab.CompFirstSet(p,s1);
+              Coco.tab.CompFirsTCocoSet(p,s1);
               str := GenCond(s1,p);
             end;
             WriteLn(Coco.Output,lineprefix,'while ',str,' do');
@@ -343,7 +343,7 @@ begin
           end;
       ntOpt:
           begin
-            Coco.tab.CompFirstSet(gn.sub,s1);
+            Coco.tab.CompFirsTCocoSet(gn.sub,s1);
             WriteLn(Coco.Output,lineprefix,'if ',GenCond(s1,gn.sub),' then');
             WriteLn(Coco.Output,lineprefix+'begin');
             PrintProductionCode(lineprefix+'  ',curSy,gn.sub,s1);

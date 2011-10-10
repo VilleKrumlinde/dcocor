@@ -18,7 +18,7 @@
 unit ParserGen;
 
 interface
-uses SysUtils, Classes, Contnrs, Sets, CharSets, CocoAncestor, CRTypes,CRA,CRT, Coco;
+uses SysUtils, Classes, Contnrs, CocoSets, CharSets, CocoAncestor, CRTypes,CRA,CRT, Coco;
 
 const
   maxInlineSet = 3;
@@ -44,11 +44,14 @@ type
     function getHasSymSets: Boolean;
     function GenParams(pos: PSymbol): String; overload;
     function GenParams(sym:TSymbol): String; overload;
-    function NewCondSet(aset: TSet): Integer;
+    function NewCondSet(aset: TCocoSet): Integer;
     function NewSynError(const Msg: String): Integer;
   public
     destructor Destroy; override;
     procedure Clear;
+    procedure WriteCoco(const S : ansistring); overload;
+    procedure WriteCoco(I,Width : integer); overload;
+    procedure WriteLnCoco(const S : ansistring);
 
     function GenTokenName(n: Integer): String;
 
@@ -74,8 +77,8 @@ type
     procedure PrintPragmas;            virtual;
     procedure PrintSemanticCode(Text: PChar; line,col,len: Integer); virtual;
 
-    function  GenTerminals(aset: TSet): String;
-    procedure PrintTerminals(aset: TSet);
+    function  GenTerminals(aset: TCocoSet): String;
+    procedure PrintTerminals(aset: TCocoSet);
     procedure PrintListOfDeletableSymbols;
     procedure PrintStartFollowerSets;
     procedure PrintXRef;
@@ -167,13 +170,13 @@ end;
 
 procedure TParserGenerator.Print(const str: String);
 begin
-  Write(Coco.Output,str);
+  WriteCoco(str);
 end;
 
 procedure TParserGenerator.PrintListEnd(count: Integer);
 begin
   if count=0 then
-    WriteLn(Coco.Output,#9'-- none --')
+    WriteCoco(#9'-- none --')
   else PrintLn;
 end;
 
@@ -186,7 +189,7 @@ begin
   if NonTerminals[I].deletable then
   begin
     Inc(C);
-    Write(Coco.Output,#13#10#9,NonTerminals[I].Name);
+    WriteCoco(#13#10#9 + NonTerminals[I].Name);
   end;
   PrintListEnd(C);
 end;
@@ -197,9 +200,9 @@ begin
   with Coco.tab do
   for I := 0 to NonTerminalCount - 1 do
   begin
-    Write(Coco.Output,#9,NonTerminals[I].Name,#13#10#9#9'first :');
+    WriteCoco(#9 + NonTerminals[I].Name + #13#10#9#9'first :');
     PrintTerminals(NonTerminals[I].first);
-    Write(Coco.Output,#9#9'follow:');
+    WriteCoco(#9#9'follow:');
     PrintTerminals(NonTerminals[I].follow);
   end;
 end;
@@ -215,12 +218,12 @@ procedure TParserGenerator.PrintStates;
     while a<>nil do
     begin
       if a.typ=ntCharClass then
-        Write(Coco.Output,str+Coco.tab.CharClassNames[a.sym])
-      else Write(Coco.Output,str+Char(a.sym));
+        WriteCoco(str+Coco.tab.CharClassNames[a.sym])
+      else WriteCoco(str+Char(a.sym));
       str := '                     ';
       for I := 0 to a.TargetCount - 1 do
-        Write(Coco.Output,a.Targets[I].index:4);
-      WriteLn(Coco.Output,IfThen(a.tc=contextTrans,' context',''));
+        WriteCoco(a.Targets[I].index,4);
+      WriteLnCoco(IfThen(a.tc=contextTrans,' context',''));
       a := a.next;
     end;
   end;
@@ -255,14 +258,17 @@ begin
   begin
     if endOf=nil then str := ''
     else str := Format('E(%12s)',[endOf.Name]);
-    Write(Coco.Output,str:15,index:4,':');
+    //WriteCoco(str:15,index:4,':');
+    WriteCoco(str);
+    WriteCoco(index,4);
+    WriteCoco(':');
     PrintActions(firstAction);
   end;
   PrintLn;
-  WriteLn(Coco.Output,'---------- character classes ----------');
+  WriteLnCoco('---------- character classes ----------');
   with Coco.tab do
   for I := 0 to CharClassCount - 1 do
-    WriteLn(Coco.Output,CharClassNames[I],' = ',CharClassSet[I].ToString);
+    WriteLnCoco(CharClassNames[I] + ' = ' + CharClassSet[I].ToString);
 end;
 
 type
@@ -278,11 +284,11 @@ begin
   begin
     empty := False;
     with gen do
-      Write(Coco.Output,' ',Coco.tab.Terminals[Index].Name);
+      WriteCoco(' ' + Coco.tab.Terminals[Index].Name);
   end;
 end;
 
-procedure TParserGenerator.PrintTerminals(aset: TSet);
+procedure TParserGenerator.PrintTerminals(aset: TCocoSet);
 var rec: TIterRec;
 begin
   with rec do
@@ -293,7 +299,7 @@ begin
   if aset<>nil then
     aset.IterateTrue(_PrintTerminalSym,@rec);
   if rec.empty then
-    WriteLn(Coco.Output,'  -- empty set--')
+    WriteLnCoco('  -- empty set--')
   else PrintLn;
 end;
 
@@ -340,7 +346,7 @@ begin
   else Result := '';
 end;
 
-function TParserGenerator.GenTerminals(aset: TSet): String;
+function TParserGenerator.GenTerminals(aset: TCocoSet): String;
 var rec: TgIterRec;
 begin
   if aset=nil then Result := '<?>'
@@ -362,7 +368,7 @@ procedure TParserGenerator.PrintSymbolTable;
   begin
     if sym.graph<>nil then str := IntToStr(sym.graph.index)
     else str := '';
-    WriteLn(Coco.Output,sym.index:3,' ',sym.Name:14,' ',sTyp[sym.typ],' ',str);
+    //WriteLn(Coco.Output,sym.index:3,' ',sym.Name:14,' ',sTyp[sym.typ],' ',str);
   end;
 var I: Integer;
 begin
@@ -438,14 +444,14 @@ begin
   else Result := '';
 end;
 
-function TParserGenerator.NewCondSet(aset: TSet): Integer;
+function TParserGenerator.NewCondSet(aset: TCocoSet): Integer;
 var I: Integer;
 begin
   if fSets=nil then
     fSets := TObjectList.Create
   else
   for I := 0 to fSets.Count - 1 do
-  if TSet(fSets[I]).Equals(aset) then
+  if TCocoSet(fSets[I]).Equals(aset) then
   begin
     Result := I; Exit;
   end;
@@ -517,6 +523,21 @@ begin
   end;
 end;
 
+procedure TParserGenerator.WriteCoco(const S: ansistring);
+begin
+  Write(Coco.Output,S);
+end;
+
+procedure TParserGenerator.WriteCoco(I,Width : integer);
+begin
+  Write(Coco.Output, Format('%d:' + IntToStr(Width) ,[I]) );
+end;
+
+procedure TParserGenerator.WriteLnCoco(const S: ansistring);
+begin
+  WriteLn(Coco.Output,S);
+end;
+
 procedure TParserGenerator.PrintListing(Errors: TList);
 var I,eI,L: Integer;
     str,strShift: String;
@@ -567,14 +588,18 @@ end;
 procedure TParserGenerator.PrintSemanticCode(Text: PChar; line, col, len: Integer);
 var strm: TStream;
     str: String;
+    S : ansistring;
 begin
   if col>1 then
-      Write(Coco.Output,StringOfChar(' ',col+1));
+      WriteCoco(StringOfChar(' ',col+1));
   if GetStreamUnderTextFile(Coco.Output,strm) then
-    strm.Write(Text^,len)
+  begin
+    S := WideCharToString(PWideChar(Text));
+    strm.Write( PAnsiChar(S)^,len)
+  end
   else begin
     SetString(str, Text,len);
-    Write(Coco.Output,str);
+    WriteCoco(AnsiString(str));
   end;
 end;
 
@@ -621,8 +646,8 @@ begin
   begin
     L := fSets.Count-1;
     for I := 0 to L-1 do
-      WriteLn(Coco.Output,#9'{',I:2,'} ',GenTerminals(TSet(fSets[I])),', -1,');
-    Write(Coco.Output,#9'{',L:2,'} ',GenTerminals(TSet(fSets[L])));
+      WriteLn(Coco.Output,#9'{',I:2,'} ',GenTerminals(TCocoSet(fSets[I])),', -1,');
+    Write(Coco.Output,#9'{',L:2,'} ',GenTerminals(TCocoSet(fSets[L])));
   end;
 end;
 

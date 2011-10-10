@@ -55,11 +55,11 @@ type
     procedure Intersect(s: TCharSet);
 
     function IsEmpty: Boolean;
-    function Equals(s: TCharSet): Boolean;
+    function Equals(s: TCharSet): Boolean; reintroduce;
     function Includes(s: TCharSet): Boolean;
     function Intersects(s: TCharSet): Boolean;
     function IsOne(var UniqIndex: Integer): Boolean;
-    function ToString: String;
+    function ToString: String; reintroduce;
 
     property Chars[Index: Integer]: Boolean read GetBit; default;
   end;

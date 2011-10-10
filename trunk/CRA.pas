@@ -18,7 +18,7 @@
 unit CRA;
 
 interface
-uses SysUtils, Classes, Contnrs, Sets, CharSets, CRTypes, CocoAncestor, CRT;
+uses SysUtils, Classes, Contnrs, CocoSets, CharSets, CRTypes, CocoAncestor, CRT;
 
 type
   TState = class;
@@ -57,7 +57,7 @@ type
 
   TState = class
   private
-    fMeltedSet: TSet;
+    fMeltedSet: TCocoSet;
     procedure FreeActionList(a: TAction);
   public
     index: Integer;
@@ -339,7 +339,7 @@ end;
 
 procedure TAutomaton.ConvertToStates(aNode: TNode; aSym: TSymbol);
 var curGraph: TNode; curSym: TSymbol;
-  visited,_stepped: TSet;
+  visited,_stepped: TCocoSet;
 
   procedure NumberNodes(gn: TNode; state: TState; renumIter: Boolean);
   begin
@@ -381,8 +381,8 @@ var curGraph: TNode; curSym: TSymbol;
     end else Result := TState(gn.state);
   end;
 
-  procedure Step(from: TState; gn: TNode; stepped: TSet);
-  var newStepped: TSet;
+  procedure Step(from: TState; gn: TNode; stepped: TCocoSet);
+  var newStepped: TCocoSet;
   begin
     if gn=nil then Exit;
     stepped[gn.index] := True;
@@ -406,7 +406,7 @@ var curGraph: TNode; curSym: TSymbol;
           Step(from, gn.sub, stepped);
           if (gn.typ=ntIter)and(TState(gn.state)<>from) then
           begin
-            newStepped := TSet.Create(SymbolTable.NodesCount);
+            newStepped := TCocoSet.Create(SymbolTable.NodesCount);
             try
               Step(TState(gn.state),gn,newStepped);
             finally
@@ -448,8 +448,8 @@ var curGraph: TNode; curSym: TSymbol;
   end;
 
 begin
-  visited := TSet.Create(SymbolTable.NodesCount);
-  _stepped := TSet.Create(SymbolTable.NodesCount);
+  visited := TCocoSet.Create(SymbolTable.NodesCount);
+  _stepped := TCocoSet.Create(SymbolTable.NodesCount);
   try
     curGraph := aNode; curSym := aSym;
     if aNode.IsDeletableGraph then
@@ -610,11 +610,11 @@ var FirstMeltedState: Integer;
   end;
 
   function GetTargetStates(a: TAction;
-     var endOf: TSymbol; var _Ctx: Boolean): TSet;
+     var endOf: TSymbol; var _Ctx: Boolean): TCocoSet;
   var I: Integer;
       s: TState;
   begin
-    Result := TSet.Create(FirstMeltedState*2);
+    Result := TCocoSet.Create(FirstMeltedState*2);
     endOf := nil;
     _Ctx := false;
     for I := 0 to a.TargetCount - 1 do
@@ -638,7 +638,7 @@ var FirstMeltedState: Integer;
 
   procedure MeltStates(state: TState);
 
-  function StateWithSet(targets: TSet): TState;
+  function StateWithSet(targets: TCocoSet): TState;
   var I: Integer;
   begin
     for I := FirstMeltedState to StatesCount - 1 do
@@ -651,7 +651,7 @@ var FirstMeltedState: Integer;
   end;
 
   var a: TAction;
-      targets: TSet;
+      targets: TCocoSet;
       endOf: TSymbol;
       ctx: Boolean;
       s: TState;
@@ -680,7 +680,7 @@ var FirstMeltedState: Integer;
   end;
 
   procedure DeleteRedundantStates;
-  var used: TSet;
+  var used: TCocoSet;
       newStates: array of TState;
       I,J: Integer;
 
@@ -700,7 +700,7 @@ var FirstMeltedState: Integer;
 
   var a: TAction;
   begin
-   used := TSet.Create(StatesCount);
+   used := TCocoSet.Create(StatesCount);
    try
     SetLength(newStates,StatesCount);
 

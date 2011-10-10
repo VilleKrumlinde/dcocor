@@ -23,7 +23,6 @@ uses
   Classes,
   CocoAncestor in 'CocoAncestor.pas',
   CRT in 'CRT.pas',
-  sets in 'sets.pas',
   CRTypes in 'CRTypes.pas',
   CRA in 'CRA.pas',
   Coco in 'Coco.PAS',
@@ -33,15 +32,18 @@ uses
   CocoCompiler in 'CocoCompiler.pas',
   CharSets in 'CharSets.pas',
   StreamText in 'StreamText.pas',
-  CocoGenerator in 'CocoGenerator.pas';
+  CocoGenerator in 'CocoGenerator.pas',
+  Windows,
+  CocoSets in 'CocoSets.pas';
 
+//This is never used
 procedure CreateOutput(const BaseName,aName: String; var strm: TStream);
 var I: Integer; path: String;
 begin
   if aName='STDOUT' then
-     strm := THandleStream.Create(-11)
+     strm := THandleStream.Create(GetStdHandle(STD_OUTPUT_HANDLE))
   else if aName='STDERR' then
-     strm := THandleStream.Create(-12)
+     strm := THandleStream.Create(GetStdHandle(STD_ERROR_HANDLE))
   else begin
     I := LastDelimiter(':.\', BaseName);
     if (I > 0) and (BaseName[I] = '.') then
@@ -62,7 +64,7 @@ begin
       Exit;
    end;
    ParserGen.ExePath := ExtractFilePath(ParamStr(0));
-   ParserGen.OnCreateOut := CreateOutput;
+//   ParserGen.OnCreateOut := CreateOutput;
    comp := TCocoCompiler.Create(nil);
    try
      if not comp.Compile(ParamStr(1)) then

@@ -25,7 +25,7 @@ unit CocoCompiler;
 interface
 
 uses Classes,CocoAncestor,
-SysUtils,Contnrs, Sets, CRTypes, CRT, CRA, Coco, ParserGen;
+SysUtils,Contnrs, CocoSets, CRTypes, CRT, CRA, Coco, ParserGen;
 
 type
 
