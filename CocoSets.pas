@@ -15,7 +15,7 @@
   the licenses in COPYING-LIB.txt, COPYING.txt and LICENSE-2.0.txt respectively.
 } 
 
-unit sets;
+unit CocoSets;
 
 interface
 uses SysUtils;
@@ -23,7 +23,7 @@ uses SysUtils;
 type
   TIterateProc = procedure(data: Pointer; Index: Integer);
 
-  TSet = class
+  TCocoSet = class
   private
     FSize: Integer;
     FBits: Pointer;
@@ -31,25 +31,25 @@ type
     procedure SetSize(Value: Integer);
     procedure SetBit(Index: Integer; Value: Boolean);
     function  GetBit(Index: Integer): Boolean;
-    procedure SyncSize(other: TSet);
+    procedure SyncSize(other: TCocoSet);
   public
-    class function Intersect(a,b: TSet): TSet;
+    class function Intersect(a,b: TCocoSet): TCocoSet;
     constructor Create(aSize: Integer=0); overload;
     constructor Create(vals: array of Integer); overload;
     destructor Destroy; override;
 
     procedure Fill;
-    procedure Assign(other: TSet);
-    function Clone: TSet;
+    procedure Assign(other: TCocoSet);
+    function Clone: TCocoSet;
     procedure Clear;
 
     function Empty: Boolean;
-    function Equals(other: TSet): Boolean;
-    function Intersects(other: TSet): Boolean;
-    function Includes(subset: TSet): Boolean;
+    function Equals(other: TCocoSet): Boolean; reintroduce;
+    function Intersects(other: TCocoSet): Boolean;
+    function Includes(subset: TCocoSet): Boolean;
 
-    procedure Unite(addset: TSet);
-    procedure Subtract(aSet: TSet);
+    procedure Unite(addset: TCocoSet);
+    procedure Subtract(aSet: TCocoSet);
 
     function IsOne(var UniqIndex: Integer): Boolean;
     procedure IterateTrue(proc: TIterateProc; data: Pointer);
@@ -79,12 +79,12 @@ type
 
 { TSet }
 
-constructor TSet.Create(aSize: Integer);
+constructor TCocoSet.Create(aSize: Integer);
 begin
   Size := aSize;
 end;
 
-procedure TSet.Assign(other: TSet);
+procedure TCocoSet.Assign(other: TCocoSet);
 var I,E: Integer;
 begin
   if other=nil then
@@ -96,17 +96,17 @@ begin
    PBitArray(FBits)^[I] := PBitArray(other.FBits)^[I];
 end;
 
-function TSet.Clone: TSet;
+function TCocoSet.Clone: TCocoSet;
 begin
   if Self=nil then
     Result := nil
   else begin
-    Result := TSet.Create(Size);
+    Result := TCocoSet.Create(Size);
     Result.Assign(Self);
   end;
 end;
 
-constructor TSet.Create(vals: array of Integer);
+constructor TCocoSet.Create(vals: array of Integer);
 var I,mI: Integer;
 begin
   if Length(vals)=0 then Exit;
@@ -118,24 +118,24 @@ begin
     Bits[vals[I]] := True;
 end;
 
-destructor TSet.Destroy;
+destructor TCocoSet.Destroy;
 begin
   setSize(0);
   inherited;
 end;
 
-procedure TSet.Error;
+procedure TCocoSet.Error;
 begin
   raise ESetError.CreateRes(@SSetIndexError);
 end;
 
-procedure TSet.SyncSize(other: TSet);
+procedure TCocoSet.SyncSize(other: TCocoSet);
 begin
   if Size<other.Size then Size := other.Size
   else if Size>other.Size then other.Size := Size;
 end;
 
-procedure TSet.Fill;
+procedure TCocoSet.Fill;
 var I,E: Integer;
 begin
   E := Size div BitsPerInt;
@@ -145,7 +145,7 @@ begin
     Bits[I] := True;
 end;
 
-procedure TSet.SetSize(Value: Integer);
+procedure TCocoSet.SetSize(Value: Integer);
 var
   NewMem: Pointer;
   NewMemSize: Integer;
@@ -183,7 +183,7 @@ begin
   end;
 end;
 
-function TSet.GetBit(Index: Integer): Boolean; assembler;
+function TCocoSet.GetBit(Index: Integer): Boolean; assembler;
 asm
         CMP     Index,[EAX].FSize
         JAE     @@1
@@ -195,7 +195,7 @@ asm
 @@1:    MOV     EAX,0
 end;
 
-procedure TSet.SetBit(Index: Integer; Value: Boolean);  assembler;
+procedure TCocoSet.SetBit(Index: Integer; Value: Boolean);  assembler;
 asm
         CMP     Index,[EAX].FSize
         JAE     @@Size
@@ -210,24 +210,24 @@ asm
         RET
 
 @@Size: CMP     Index,0
-        JL      TSet.Error
+        JL      TCocoSet.Error
         PUSH    Self
         PUSH    Index
         PUSH    ECX {Value}
         INC     Index
-        CALL    TSet.SetSize
+        CALL    TCocoSet.SetSize
         POP     ECX {Value}
         POP     Index
         POP     Self
         JMP     @@1
 end;
 
-procedure TSet.Clear;
+procedure TCocoSet.Clear;
 begin
   FillChar(FBits^, ((Size + BitsPerInt - 1) div BitsPerInt) * SizeOf(Integer), 0);
 end;
 
-function TSet.Empty: Boolean;
+function TCocoSet.Empty: Boolean;
 var I,E: Integer;
 begin
   E := (Size + BitsPerInt - 1) div BitsPerInt - 1;
@@ -239,14 +239,14 @@ begin
   Result := True;
 end;
 
-function TSet.Equals(other: TSet): Boolean;
+function TCocoSet.Equals(other: TCocoSet): Boolean;
 begin
   SyncSize(other);
   Result := CompareMem(FBits, other.FBits,
     ((Size + BitsPerInt - 1) div BitsPerInt) * SizeOf(Integer));
 end;
 
-function TSet.Includes(subset: TSet): Boolean;
+function TCocoSet.Includes(subset: TCocoSet): Boolean;
 var I,E: Integer;
 begin
   SyncSize(subset);
@@ -259,18 +259,18 @@ begin
   Result := True;
 end;
 
-class function TSet.Intersect(a, b: TSet): TSet;
+class function TCocoSet.Intersect(a, b: TCocoSet): TCocoSet;
 var I,E: Integer;
 begin
   a.SyncSize(b);
-  Result := TSet.Create(a.Size);
+  Result := TCocoSet.Create(a.Size);
 
   E := (a.Size + BitsPerInt - 1) div BitsPerInt - 1;
   for I := 0 to E do
    PBitArray(Result.FBits)^[I] := PBitArray(a.FBits)^[I] * PBitArray(b.FBits)^[I];
 end;
 
-function TSet.Intersects(other: TSet): Boolean;
+function TCocoSet.Intersects(other: TCocoSet): Boolean;
 var I,E: Integer;
 begin
   SyncSize(other);
@@ -283,7 +283,7 @@ begin
   Result := False;
 end;
 
-procedure TSet.IterateTrue(proc: TIterateProc; data: Pointer);
+procedure TCocoSet.IterateTrue(proc: TIterateProc; data: Pointer);
 var I,J,E: Integer;
 begin
   E := (Size + BitsPerInt - 1) div BitsPerInt - 1;
@@ -304,7 +304,7 @@ begin
   else PInteger(data)^ := -1;
 end;
 
-function TSet.IsOne(var UniqIndex: Integer): Boolean;
+function TCocoSet.IsOne(var UniqIndex: Integer): Boolean;
 var ind: Integer;
 begin
   ind := -2;
@@ -313,7 +313,7 @@ begin
   if Result then UniqIndex := ind;
 end;
 
-procedure TSet.Unite(addset: TSet);
+procedure TCocoSet.Unite(addset: TCocoSet);
 var I,E: Integer;
 begin
   if addset=nil then Exit;
@@ -324,7 +324,7 @@ begin
     PBitArray(FBits)^[I] := PBitArray(FBits)^[I] + PBitArray(addset.FBits)^[I];
 end;
 
-procedure TSet.Subtract(aSet: TSet);
+procedure TCocoSet.Subtract(aSet: TCocoSet);
 var I,E: Integer;
 begin
   SyncSize(aSet);
@@ -338,7 +338,7 @@ begin
   Inc(PInteger(data)^);
 end;
 
-function TSet.Count: Integer;
+function TCocoSet.Count: Integer;
 begin
   Result := 0;
   IterateTrue(_Count,@Result);

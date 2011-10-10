@@ -18,7 +18,7 @@
 unit CocoAncestor;
 
 interface
-uses Classes, Sets;
+uses Classes, CocoSets;
 
 const
   minErrDist = 2; { minimal distance (good tokens) between two errors }
@@ -40,7 +40,7 @@ type
 {$ENDIF}
   TCocoRGrammar = class;
 
-  TSetArray = array of TSet;
+  TSetArray = array of TCocoSet;
 
   PSymbol = ^TSymbolRec;
   TSymbolRec = record
@@ -63,6 +63,7 @@ type
     function getState(const aCh: Integer): Integer;
     procedure setState(const aCh: Integer; const Value: Integer);
   public
+    constructor Create;
     procedure FillRange(start_, end_, value: Integer);
     property States[const aCh: Integer]: Integer read getState write setState; default;
   end;
@@ -248,14 +249,19 @@ type
 
 procedure ClearSymbol(pos: PSymbol);
 function LoadFileToString(const FileName: String): String;
-function CreateLiterals(aCaseSensitive: Boolean; Names: array of String; Ids: array of Integer): TStringList;
+function CreateLiterals(aCaseSensitive: Boolean; const Names: array of String; const Ids: array of Integer): TStringList;
 
 var LineBreak: String = sLineBreak;
     LineBreakLen: Integer;
     ResorceSystem: TResorceSystem;
 
 implementation
-uses SysUtils,Windows;
+
+uses SysUtils,Windows,Generics.Collections;
+
+var
+  _GlobalCleanUps : TObjectList<TObject>;
+
 
 function LoadFileToString(const FileName: String): String;
 var fstrm: TFileStream;
@@ -272,7 +278,7 @@ begin
   end;
 end;
 
-function CreateLiterals(aCaseSensitive: Boolean; Names: array of String; Ids: array of Integer): TStringList;
+function CreateLiterals(aCaseSensitive: Boolean; const Names: array of String; const Ids: array of Integer): TStringList;
 var I: Integer;
 begin
   Result := TStringList.Create;
@@ -283,7 +289,8 @@ begin
     Duplicates := dupIgnore;
   end;
   for I := Low(Names) to High(Names) do
-  Result.AddObject(Names[I], TObject(Ids[I]));
+    Result.AddObject(Names[I], TObject(Ids[I]));
+  _GlobalCleanUps.Add(Result);
 end;
 
 { TSymbolRec }
@@ -486,6 +493,7 @@ end;
 function TCocoRScanner.CharUTF8At(var pos: Integer): CocoChar;
 var ch: Integer;
 begin
+  ch := 0;
   if (pos<0)or(pos>=SourceLen) then
         Result := #0
   else begin
@@ -497,13 +505,13 @@ begin
      end;
      if (ch and $F0)=$F0 then
      begin
-		  Result := CocoChar(((((((ch and $7) shl 6) or (Ord(fSource[pos+SourceBegin+2])and $3F)) shl 6)
+      Result := CocoChar(((((((ch and $7) shl 6) or (Ord(fSource[pos+SourceBegin+2])and $3F)) shl 6)
                   or (Ord(fSource[pos+SourceBegin+3])and $3F)) shl 6)
                   or (Ord(fSource[pos+SourceBegin+4]) and $3F));
       Inc(pos,4);
      end else if (ch and $E0)=$E0 then
      begin
-		  Result := CocoChar(((((ch and $F) shl 6) or (Ord(fSource[pos+SourceBegin+2])and $3F)) shl 6)
+      Result := CocoChar(((((ch and $F) shl 6) or (Ord(fSource[pos+SourceBegin+2])and $3F)) shl 6)
                 or (Ord(fSource[pos+SourceBegin+3])and $3F));
       Inc(pos,3);
      end else if (ch and $C0)=$C0 then
@@ -841,7 +849,10 @@ begin
 
   SetLength(aSymSets,C);
   for I := 0 to C-1 do
-    aSymSets[I] := TSet.Create(mI+1);
+  begin
+    aSymSets[I] := TCocoSet.Create(mI+1);
+    _GlobalCleanUps.Add(aSymSets[I]);
+  end;
 
   C := 0;
   for I := Low(vals) to High(vals) do
@@ -1036,6 +1047,11 @@ end;
 
 { TStartTable }
 
+constructor TStartTable.Create;
+begin
+  _GlobalCleanUps.Add(Self);
+end;
+
 procedure TStartTable.FillRange(start_, end_, value: Integer);
 var I,J,K,C: Integer;
 begin
@@ -1093,4 +1109,7 @@ end;
 
 initialization
    LineBreakLen := Length(LineBreak);
+   _GlobalCleanUps := TObjectList<TObject>.Create(True);
+finalization
+   _GlobalCleanUps.Free;
 end.

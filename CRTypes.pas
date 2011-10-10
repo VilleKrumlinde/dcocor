@@ -18,7 +18,7 @@
 unit CRTypes;
 
 interface
-uses Sets, CocoAncestor;
+uses CocoSets, CocoAncestor;
 
 const
   normalTrans  = 0;
@@ -46,9 +46,9 @@ type
   TNode = class
   private
     fTyp: TNodeType;
-    fSet: TSet;
+    fSet: TCocoSet;
     function getNum: Integer;
-    procedure setSet(const Value: TSet);
+    procedure setSet(const Value: TCocoSet);
   public
     index: Integer;
     line: Integer;
@@ -71,7 +71,7 @@ type
 
     property typ: TNodeType read fTyp;
     property Num: Integer read getNum;
-    property aset: TSet read fSet write setSet; //ntAny, ntSync: the set represented by this node
+    property aset: TCocoSet read fSet write setSet; //ntAny, ntSync: the set represented by this node
   end;
 
   TSymbol = class
@@ -103,9 +103,9 @@ type
   TNtSymbol = class(TSymbol)
   public
     fGraph: TNode;       //to first node of syntax graph
-    first: TSet;         // terminal start symbols
-    follow: TSet;        // terminal followers
-    nts: TSet;           // nonterminals whose followers have to be added to this sym
+    first: TCocoSet;         // terminal start symbols
+    follow: TCocoSet;        // terminal followers
+    nts: TCocoSet;           // nonterminals whose followers have to be added to this sym
     deletable: Boolean;  // true if nonterminal is deletable
     destructor Destroy; override;
   end;
@@ -215,7 +215,7 @@ begin
   Result := (Self=nil)or (IsDeletableNode and (up or next.IsDeletableSubGraph));
 end;
 
-procedure TNode.setSet(const Value: TSet);
+procedure TNode.setSet(const Value: TCocoSet);
 begin
   if fSet=nil then
     fSet := Value.Clone
