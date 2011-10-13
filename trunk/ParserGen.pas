@@ -49,9 +49,9 @@ type
   public
     destructor Destroy; override;
     procedure Clear;
-    procedure WriteCoco(const S : ansistring); overload;
+    procedure WriteCoco(const S : string); overload;
     procedure WriteCoco(I,Width : integer); overload;
-    procedure WriteLnCoco(const S : ansistring);
+    procedure WriteLnCoco(const S : string);
 
     function GenTokenName(n: Integer): String;
 
@@ -368,7 +368,7 @@ procedure TParserGenerator.PrintSymbolTable;
   begin
     if sym.graph<>nil then str := IntToStr(sym.graph.index)
     else str := '';
-    //WriteLn(Coco.Output,sym.index:3,' ',sym.Name:14,' ',sTyp[sym.typ],' ',str);
+    WriteLn(Coco.Output,sym.index:3,' ',sym.Name:14,' ',sTyp[sym.typ],' ',str);
   end;
 var I: Integer;
 begin
@@ -523,9 +523,9 @@ begin
   end;
 end;
 
-procedure TParserGenerator.WriteCoco(const S: ansistring);
+procedure TParserGenerator.WriteCoco(const S: string);
 begin
-  Write(Coco.Output,S);
+  Write(Coco.Output,AnsiString(S))
 end;
 
 procedure TParserGenerator.WriteCoco(I,Width : integer);
@@ -533,9 +533,9 @@ begin
   Write(Coco.Output, Format('%d:' + IntToStr(Width) ,[I]) );
 end;
 
-procedure TParserGenerator.WriteLnCoco(const S: ansistring);
+procedure TParserGenerator.WriteLnCoco(const S: string);
 begin
-  WriteLn(Coco.Output,S);
+  WriteLn(Coco.Output,AnsiString(S));
 end;
 
 procedure TParserGenerator.PrintListing(Errors: TList);
@@ -594,12 +594,13 @@ begin
       WriteCoco(StringOfChar(' ',col+1));
   if GetStreamUnderTextFile(Coco.Output,strm) then
   begin
-    S := WideCharToString(PWideChar(Text));
+    S := AnsiString(WideCharToString(PWideChar(Text)));
     strm.Write( PAnsiChar(S)^,len)
   end
-  else begin
+  else
+  begin
     SetString(str, Text,len);
-    WriteCoco(AnsiString(str));
+    WriteCoco(str);
   end;
 end;
 

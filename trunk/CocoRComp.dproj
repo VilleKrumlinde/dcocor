@@ -60,6 +60,8 @@
 			<DCC_ExeOutput>.\bin</DCC_ExeOutput>
 		</PropertyGroup>
 		<PropertyGroup Condition="'$(Cfg_2_Win32)'!=''">
+			<Debugger_CWD>.\</Debugger_CWD>
+			<Debugger_RunParams>.\pas\atg\delphicond.atg</Debugger_RunParams>
 			<Manifest_File>None</Manifest_File>
 		</PropertyGroup>
 		<ProjectExtensions>
