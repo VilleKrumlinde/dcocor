@@ -25,12 +25,15 @@ type
 
   TCocoSet = class
   private
+  const
+    BitsPerInt = SizeOf(Integer) * 8;
+  var
     FSize: Integer;
     FBits: Pointer;
     procedure Error;
     procedure SetSize(Value: Integer);
     procedure SetBit(Index: Integer; Value: Boolean);
-    function  GetBit(Index: Integer): Boolean;
+    function  GetBit(Index: Integer): Boolean; {$ifdef fpc} ms_abi_default; {$endif}
     procedure SyncSize(other: TCocoSet);
   public
     class function Intersect(a,b: TCocoSet): TCocoSet;
@@ -183,19 +186,23 @@ begin
   end;
 end;
 
-function TCocoSet.GetBit(Index: Integer): Boolean; assembler;
-{$ifdef cpux64}
+function TCocoSet.GetBit(Index: Integer): Boolean; {$ifdef fpc} ms_abi_default; {$endif}
+{$if Defined(cpux64)}
+assembler;
 asm
-        CMP     Index,[RCX].FSize
+        CMP     Index,Self.FSize
         JAE     @@1
-        MOV     RAX,[RCX].FBits
+        MOV     RAX,Self.FBits
         BT      [RAX],Index
         SBB     EAX,EAX
         AND     EAX,1
-        RET
+        JMP      @@2
 @@1:    MOV     EAX,0
+@@2:
 end;
-{$else}
+
+{$elseif Defined(cpux86)}
+assembler;
 asm
         CMP     Index,[EAX].FSize
         JAE     @@1
@@ -206,17 +213,49 @@ asm
         RET
 @@1:    MOV     EAX,0
 end;
+{$else}
+var
+  LRelInt: PInteger;
+  LMask: Integer;
+begin
+  if (Index >= FSize) or (Index < 0) then
+    Error;
+
+  LRelInt := FBits;
+  Inc(LRelInt, Index div BitsPerInt);
+
+  LMask := (1 shl (Index mod BitsPerInt));
+  Result := (LRelInt^ and LMask) <> 0;
+end;
 {$endif}
 
-procedure TCocoSet.SetBit(Index: Integer; Value: Boolean);  assembler;
-{$ifdef cpux64}
-//begin
-//  if Index>=FSize then
-//  begin
-//    SetSize(Index+1);
-//  end;
-//  PByte(NativeInt(Self.FBits) + (Index shr 3))
-//end;
+procedure TCocoSet.SetBit(Index: Integer; Value: Boolean); {$ifndef fpc}assembler;{$endif}
+{$if Defined(cpux64)}
+
+{$ifdef fpc}
+var
+  P : pointer;
+begin
+  if Index>=FSize then
+  begin
+    SetSize(Index+1);
+  end;
+  P := Self.FBits;
+  asm
+    MOV     RAX,P
+    MOV     CL, Value
+    OR      CL,CL
+    JZ      @@2
+    MOV     R8D,Index
+    BTS     [RAX],R8
+    JMP     @@3
+@@2: 
+    BTR     [RAX],R8
+@@3:
+  end;
+end;
+
+{$else}
 asm
         CMP     Index,[RCX].FSize
         JAE     @@Size
@@ -242,7 +281,9 @@ asm
         POP     RCX
         JMP     @@1
 end;
-{$else}
+{$endif}
+
+{$elseif Defined(cpux86)}
 asm
         CMP     Index,[EAX].FSize
         JAE     @@Size
@@ -267,6 +308,27 @@ asm
         POP     Index
         POP     Self
         JMP     @@1
+end;
+{$else}
+var
+  LRelInt: PInteger;
+  LMask: Integer;
+begin
+  if Index < 0 then
+    Error;
+
+  if Index >= FSize then
+    SetSize(Index + 1);
+
+  LRelInt := FBits;
+  Inc(LRelInt, Index div BitsPerInt);
+
+  LMask := (1 shl (Index mod BitsPerInt));
+
+  if Value then
+    LRelInt^ := LRelInt^ or LMask
+  else
+    LRelInt^ := LRelInt^ and not LMask;
 end;
 {$endif}
 

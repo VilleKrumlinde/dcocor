@@ -257,7 +257,7 @@ var LineBreak: String = sLineBreak;
 
 implementation
 
-uses SysUtils,Windows,Generics.Collections;
+uses SysUtils,Winapi.Windows,Generics.Collections;
 
 var
   _GlobalCleanUps : TObjectList<TObject>;
@@ -493,7 +493,6 @@ end;
 function TCocoRScanner.CharUTF8At(var pos: Integer): CocoChar;
 var ch: Integer;
 begin
-  ch := 0;
   if (pos<0)or(pos>=SourceLen) then
         Result := #0
   else begin
@@ -641,7 +640,11 @@ function TCocoRScanner.CapChUTF8At(var pos: Integer): CocoChar;
 begin
   Result := CharAt(pos);
   if Result<>#0 then
+    {$IFDEF UNICODE}
+    Result := UpCase(Result);
+    {$ELSE}
     CharUpperBuffW(Pointer(@Result),1);
+    {$ENDIF}
 end;
 
 procedure TCocoRScanner.Get(var sym: TSymbolRec);
